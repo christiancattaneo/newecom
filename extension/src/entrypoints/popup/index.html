@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sift</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>🎯 Sift</h1>
+      <p class="tagline">Smart shopping assistant</p>
+    </header>
+
+    <main>
+      <section id="status-section">
+        <div id="status-indicator" class="status inactive">
+          <span class="dot"></span>
+          <span class="text">No active context</span>
+        </div>
+      </section>
+
+      <section id="context-section" class="hidden">
+        <h2>Your Search</h2>
+        <div id="context-display">
+          <p id="context-query"></p>
+          <ul id="context-requirements"></ul>
+        </div>
+        <button id="clear-context" class="btn-secondary">Clear Context</button>
+      </section>
+
+      <section id="no-context-section">
+        <div class="empty-state">
+          <div class="icon">💬</div>
+          <p>Start researching a product in ChatGPT</p>
+          <p class="hint">Sift will automatically capture your requirements</p>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <p>Visit a shopping site to see recommendations</p>
+    </footer>
+  </div>
+
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>
+

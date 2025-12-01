@@ -119,6 +119,14 @@ site/
 *.old
 .history/
 
+# WXT/Extension build output
+extension/.output/
+extension/dist/
+
+# Wrangler
+backend/.wrangler/
+backend/.dev.vars
+
 # Package manager locks (keep one, ignore others)
 # Uncomment the ones you don't use:
 # package-lock.json
