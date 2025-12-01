@@ -29,14 +29,25 @@ const SHOPPING_KEYWORDS = [
   'machine', 'device', 'appliance', 'product', 'item', 'gear', 'equipment',
 ];
 
-// Product categories to detect
+// Product categories to detect (longer phrases to avoid false matches)
 const PRODUCT_CATEGORIES = [
-  'espresso machine', 'coffee maker', 'laptop', 'phone', 'headphones',
-  'monitor', 'keyboard', 'mouse', 'camera', 'tv', 'television',
-  'refrigerator', 'washer', 'dryer', 'vacuum', 'air purifier',
-  'mattress', 'chair', 'desk', 'sofa', 'couch',
-  'blender', 'toaster', 'microwave', 'air fryer',
-  'bike', 'scooter', 'treadmill', 'weights',
+  // Electronics
+  'espresso machine', 'coffee maker', 'laptop', 'smartphone', 'headphones',
+  'monitor', 'keyboard', 'mouse', 'camera', 'television', '4k tv', 'smart tv',
+  'tablet', 'smartwatch', 'earbuds', 'speaker', 'soundbar',
+  // Appliances  
+  'refrigerator', 'washing machine', 'dryer', 'vacuum cleaner', 'air purifier',
+  'dishwasher', 'blender', 'toaster', 'microwave', 'air fryer', 'instant pot',
+  // Furniture
+  'mattress', 'office chair', 'gaming chair', 'standing desk', 'sofa', 'couch',
+  // Fitness
+  'treadmill', 'exercise bike', 'dumbbells', 'yoga mat', 'resistance bands',
+  // Fashion & Footwear
+  'running shoes', 'sneakers', 'boots', 'sandals', 'dress shoes', 'hiking boots',
+  'walking shoes', 'tennis shoes', 'basketball shoes', 'training shoes',
+  'backpack', 'luggage', 'suitcase', 'watch', 'sunglasses',
+  // Outdoor
+  'tent', 'sleeping bag', 'camping gear', 'grill', 'lawn mower',
 ];
 
 function initContextCapture() {
@@ -138,11 +149,15 @@ function extractConversation(): string {
 function extractProductContext(text: string): { query: string; requirements: string[] } {
   const lowerText = text.toLowerCase();
   
-  // Try to find the product category
+  // Try to find the product category (check longer phrases first)
   let query = '';
-  for (const category of PRODUCT_CATEGORIES) {
+  // Sort by length descending to match longer, more specific phrases first
+  const sortedCategories = [...PRODUCT_CATEGORIES].sort((a, b) => b.length - a.length);
+  
+  for (const category of sortedCategories) {
     if (lowerText.includes(category)) {
       query = category;
+      console.log('[Sift] Matched category:', category);
       break;
     }
   }
@@ -150,17 +165,20 @@ function extractProductContext(text: string): { query: string; requirements: str
   // If no category found, try to extract from "looking for X" patterns
   if (!query) {
     const patterns = [
-      /looking for (?:a |an )?([^.,!?]+)/i,
-      /need (?:a |an )?([^.,!?]+)/i,
-      /want (?:a |an )?([^.,!?]+)/i,
-      /recommend (?:a |an )?([^.,!?]+)/i,
-      /best ([^.,!?]+)/i,
+      /looking for (?:a |an |some )?(?:good |great |best )?([^.,!?\n]+)/i,
+      /need (?:a |an |some )?(?:good |great |new )?([^.,!?\n]+)/i,
+      /want (?:a |an |some )?(?:good |great |new )?([^.,!?\n]+)/i,
+      /recommend(?:ation)?s? (?:for |on )?(?:a |an |some )?([^.,!?\n]+)/i,
+      /best ([^.,!?\n]+?) (?:for|under|around|that)/i,
+      /shopping for (?:a |an |some )?([^.,!?\n]+)/i,
+      /buy(?:ing)? (?:a |an |some )?([^.,!?\n]+)/i,
     ];
 
     for (const pattern of patterns) {
       const match = text.match(pattern);
-      if (match && match[1]) {
-        query = match[1].trim().slice(0, 50); // Limit length
+      if (match && match[1] && match[1].length > 3) {
+        query = match[1].trim().slice(0, 60);
+        console.log('[Sift] Extracted query from pattern:', query);
         break;
       }
     }

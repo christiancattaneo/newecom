@@ -363,33 +363,44 @@ function showOverlay(options: {
     `;
   } else if (options.products && options.products.length > 0) {
     const productCards = options.products.map((p, i) => `
-      <div class="sift-product" onclick="window.location.href='${p.url}'">
-        <div class="sift-rank">#${i + 1}</div>
+      <div class="sift-product" onclick="window.open('${p.url}', '_blank')">
+        <div class="sift-product-left">
+          <div class="sift-rank-badge">${i + 1}</div>
+          ${p.imageUrl ? `<img class="sift-product-img" src="${p.imageUrl}" alt="" />` : '<div class="sift-product-img-placeholder">📦</div>'}
+        </div>
         <div class="sift-product-info">
-          <div class="sift-product-title">${p.title.slice(0, 60)}${p.title.length > 60 ? '...' : ''}</div>
+          <div class="sift-product-title">${p.title.slice(0, 55)}${p.title.length > 55 ? '...' : ''}</div>
           <div class="sift-product-meta">
-            ${p.price ? `<span class="sift-price">$${p.price.toFixed(2)}</span>` : ''}
-            <span class="sift-score">${p.score}% match</span>
+            ${p.price ? `<span class="sift-price">$${p.price.toFixed(2)}</span>` : '<span class="sift-price">Price N/A</span>'}
+            <span class="sift-score-badge">${p.score}%</span>
           </div>
           <div class="sift-reasons">
-            ${p.reasons.slice(0, 2).map(r => `<span class="sift-reason">✓ ${r}</span>`).join('')}
+            ${p.reasons.slice(0, 3).map(r => `<div class="sift-reason">${r}</div>`).join('')}
           </div>
         </div>
       </div>
     `).join('');
 
+    const reqTags = options.context.requirements.slice(0, 4).map(r => 
+      `<span class="sift-req-tag">${r}</span>`
+    ).join('');
+
     content = `
       <div class="sift-header">
         <span class="sift-logo">🎯 Sift</span>
+        <span class="sift-subtitle">AI Analysis</span>
         <button class="sift-close" onclick="document.getElementById('sift-overlay').remove()">×</button>
       </div>
-      <div class="sift-summary">
-        <span>Your search:</span> "${options.context.query}"
+      <div class="sift-context">
+        <div class="sift-query">"${options.context.query}"</div>
+        <div class="sift-req-tags">${reqTags}</div>
       </div>
+      ${options.summary ? `<div class="sift-ai-summary">💡 ${options.summary}</div>` : ''}
       <div class="sift-body">
         ${productCards}
       </div>
       <div class="sift-footer">
+        <span class="sift-powered">Powered by AI</span>
         <button class="sift-dismiss" onclick="document.getElementById('sift-overlay').remove()">Dismiss</button>
       </div>
     `;
@@ -439,6 +450,14 @@ function showOverlay(options: {
         font-size: 16px;
         color: #fff;
       }
+      .sift-subtitle {
+        font-size: 11px;
+        color: #10b981;
+        background: #0f3d0f;
+        padding: 2px 8px;
+        border-radius: 10px;
+        margin-left: 8px;
+      }
       .sift-close {
         background: none;
         border: none;
@@ -485,84 +504,156 @@ function showOverlay(options: {
         text-align: center;
         color: #f87171;
       }
+      .sift-context {
+        padding: 10px 16px;
+        background: #16213e;
+        border-bottom: 1px solid #2a2a4a;
+      }
+      .sift-query {
+        font-size: 14px;
+        font-weight: 600;
+        color: #10b981;
+        margin-bottom: 8px;
+      }
+      .sift-req-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+      .sift-req-tag {
+        font-size: 10px;
+        background: #2a2a4a;
+        color: #888;
+        padding: 3px 8px;
+        border-radius: 12px;
+      }
+      .sift-ai-summary {
+        padding: 10px 16px;
+        background: linear-gradient(135deg, #1a3a2a 0%, #16213e 100%);
+        font-size: 12px;
+        color: #a7f3d0;
+        border-bottom: 1px solid #2a2a4a;
+        line-height: 1.4;
+      }
       .sift-product {
         display: flex;
-        gap: 12px;
+        gap: 10px;
         padding: 12px;
         background: #16213e;
         border-radius: 8px;
         margin-bottom: 8px;
         cursor: pointer;
-        transition: background 0.2s;
+        transition: all 0.2s;
+        border: 1px solid transparent;
       }
       .sift-product:hover {
         background: #1f2b47;
+        border-color: #10b981;
+        transform: translateX(2px);
       }
-      .sift-rank {
+      .sift-product-left {
         flex-shrink: 0;
-        width: 28px;
-        height: 28px;
+        position: relative;
+        width: 60px;
+      }
+      .sift-rank-badge {
+        position: absolute;
+        top: -4px;
+        left: -4px;
+        width: 20px;
+        height: 20px;
         background: linear-gradient(135deg, #10b981 0%, #059669 100%);
         border-radius: 50%;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-weight: 600;
-        font-size: 12px;
+        font-weight: 700;
+        font-size: 11px;
         color: #fff;
+        z-index: 1;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+      }
+      .sift-product-img {
+        width: 60px;
+        height: 60px;
+        object-fit: contain;
+        background: #fff;
+        border-radius: 6px;
+      }
+      .sift-product-img-placeholder {
+        width: 60px;
+        height: 60px;
+        background: #2a2a4a;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 24px;
       }
       .sift-product-info {
         flex: 1;
         min-width: 0;
       }
       .sift-product-title {
-        font-size: 13px;
+        font-size: 12px;
         font-weight: 500;
         margin-bottom: 4px;
         color: #fff;
+        line-height: 1.3;
       }
       .sift-product-meta {
         display: flex;
+        align-items: center;
         gap: 8px;
-        font-size: 12px;
         margin-bottom: 6px;
       }
       .sift-price {
-        font-weight: 600;
+        font-weight: 700;
+        font-size: 14px;
         color: #10b981;
       }
-      .sift-score {
-        color: #888;
-      }
-      .sift-reasons {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 4px;
-      }
-      .sift-reason {
+      .sift-score-badge {
         font-size: 11px;
-        background: #0f3d0f;
-        color: #4ade80;
+        font-weight: 600;
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        color: #fff;
         padding: 2px 6px;
         border-radius: 4px;
       }
+      .sift-reasons {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .sift-reason {
+        font-size: 11px;
+        color: #a0aec0;
+        line-height: 1.3;
+        padding-left: 2px;
+      }
       .sift-footer {
-        padding: 12px 16px;
+        padding: 10px 16px;
         border-top: 1px solid #2a2a4a;
         display: flex;
-        justify-content: flex-end;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .sift-powered {
+        font-size: 10px;
+        color: #555;
       }
       .sift-dismiss {
         background: #2a2a4a;
         border: none;
         color: #888;
-        padding: 6px 12px;
+        padding: 6px 14px;
         border-radius: 6px;
         cursor: pointer;
         font-size: 12px;
+        transition: all 0.2s;
       }
       .sift-dismiss:hover {
-        background: #3a3a5a;
+        background: #10b981;
         color: #fff;
       }
     </style>

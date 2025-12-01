@@ -217,33 +217,52 @@ function buildPrompt(context: ProductContext, products: ProductData[]): string {
   const productList = products
     .map((p, i) => {
       const priceStr = p.price ? `$${p.price.toFixed(2)}` : 'Price unknown';
-      return `[${i}] ${p.title}\n    Price: ${priceStr}\n    ${p.description ? `Description: ${p.description.slice(0, 200)}` : ''}`;
+      return `[${i}] ${p.title}\n    Price: ${priceStr}\n    ${p.description ? `Details: ${p.description.slice(0, 300)}` : ''}`;
     })
     .join('\n\n');
 
   return `
-User is looking for: "${context.query}"
+You are an expert product analyst helping a user find the perfect product based on their research.
 
-Their requirements:
-${context.requirements.map(r => `- ${r}`).join('\n')}
+## User's Search
+Product type: "${context.query}"
 
-Available products:
+## User's Requirements (from their research):
+${context.requirements.map(r => `• ${r}`).join('\n')}
+
+## Products on Current Page:
 ${productList}
 
-Analyze each product against the user's requirements. For each product, determine:
-1. A match score from 0-100 (100 = perfect match)
-2. 2-3 specific reasons why it does or doesn't match
+## Your Task
+Analyze each product against the user's specific requirements. Be insightful and specific.
 
-Respond with JSON in this exact format:
+For each product, provide:
+1. **Match Score (0-100)**: How well it meets their exact requirements
+2. **Key Reasons (2-3)**: Specific, actionable insights like:
+   - "✓ $89 is well under your $100 budget"
+   - "✓ Known for exceptional arch support - ideal for wide feet"
+   - "⚠ Synthetic upper may not be as breathable"
+   - "✗ No cushioning technology mentioned"
+
+Be specific about WHY each product does or doesn't fit. Reference actual product features.
+
+## Response Format (JSON only):
 {
   "rankings": [
-    { "index": 0, "score": 85, "reasons": ["Meets budget", "Good reviews for durability"] },
-    { "index": 1, "score": 72, "reasons": ["Slightly over budget", "Has required features"] }
+    { 
+      "index": 0, 
+      "score": 92, 
+      "reasons": ["At $79, leaves room in your $100 budget for accessories", "EVA foam midsole provides the cushioning you need", "Wide fit option available"] 
+    }
   ],
-  "summary": "Brief summary of the best options"
+  "summary": "One sentence recommendation highlighting the top pick and why"
 }
 
-Only include products with score > 50. Sort by score descending.
+Rules:
+- Only include products scoring 40+
+- Sort by score descending
+- Maximum 5 products
+- Be specific, not generic
 `;
 }
 
