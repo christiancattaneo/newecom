@@ -1,6 +1,6 @@
 /**
  * ChatGPT Content Script
- * Silently captures product research context from ChatGPT conversations
+ * Captures product research context from ChatGPT conversations
  */
 
 export default defineContentScript({
@@ -20,36 +20,15 @@ let isContextValid = true;
 
 const DEBOUNCE_MS = 800;
 
-const SHOPPING_KEYWORDS = [
-  'buy', 'purchase', 'recommend', 'best', 'review', 'price', 'budget',
-  'looking for', 'need', 'want', 'shopping', 'compare', 'vs', 'versus',
-  'under $', 'less than', 'cheaper', 'affordable', 'quality',
-  'durable', 'reliable', 'warranty', 'features', 'specs', 'specification',
-  'amazon', 'best buy', 'target', 'walmart', 'ebay',
-  'machine', 'device', 'appliance', 'product', 'item', 'gear', 'equipment',
-  'shoes', 'footwear', 'clothing', 'jacket', 'pants',
-];
-
-const PRODUCT_CATEGORIES = [
-  'espresso machine', 'coffee maker', 'laptop', 'smartphone', 'headphones',
-  'monitor', 'keyboard', 'mouse', 'camera', 'television', '4k tv', 'smart tv',
-  'tablet', 'smartwatch', 'earbuds', 'speaker', 'soundbar', 'gaming console',
-  'refrigerator', 'washing machine', 'dryer', 'vacuum cleaner', 'air purifier',
-  'dishwasher', 'blender', 'toaster', 'microwave', 'air fryer', 'instant pot',
-  'mattress', 'office chair', 'gaming chair', 'standing desk', 'sofa', 'couch',
-  'treadmill', 'exercise bike', 'dumbbells', 'yoga mat', 'resistance bands',
-  'running shoes', 'sneakers', 'boots', 'sandals', 'dress shoes', 'hiking boots',
-  'walking shoes', 'tennis shoes', 'basketball shoes', 'training shoes',
-  'backpack', 'luggage', 'suitcase', 'watch', 'sunglasses',
-  'winter jacket', 'rain jacket', 'hoodie', 'jeans', 'dress shirt',
-  'tent', 'sleeping bag', 'camping gear', 'grill', 'lawn mower',
-  'wireless earbuds', 'mechanical keyboard', 'gaming mouse', 'webcam',
-  'external hard drive', 'portable charger', 'power bank',
+// Shopping intent signals
+const SHOPPING_SIGNALS = [
+  'best', 'recommend', 'buy', 'purchase', 'looking for', 'need', 'want',
+  'shopping', 'compare', 'vs', 'review', 'under $', 'budget', 'affordable',
+  'top', 'which', 'what should', 'suggestion', 'advice',
 ];
 
 function checkExtensionContext(): boolean {
   try {
-    // This will throw if context is invalidated
     return !!browser.runtime?.id;
   } catch {
     return false;
@@ -126,9 +105,7 @@ function handleMutation(mutations: MutationRecord[]) {
     const target = mutation.target as HTMLElement;
     return target.closest?.('[data-message-author-role]') || 
            target.closest?.('.markdown') ||
-           target.closest?.('.user-message-bubble-color') ||
-           target.classList?.contains('markdown') ||
-           target.classList?.contains('prose');
+           target.closest?.('.user-message-bubble-color');
   });
 
   if (isRelevant) {
@@ -138,7 +115,6 @@ function handleMutation(mutations: MutationRecord[]) {
 }
 
 async function processConversation(isInitialLoad: boolean) {
-  // Check if extension context is still valid
   if (!checkExtensionContext()) {
     isContextValid = false;
     showRefreshMessage();
@@ -146,50 +122,55 @@ async function processConversation(isInitialLoad: boolean) {
   }
 
   try {
-    const { userMessages, aiMessages, fullText } = extractConversation();
+    const { userMessages, aiMessages } = extractConversation();
     
-    console.log(`[Sift] Extracted: ${userMessages.length} user messages, ${aiMessages.length} AI messages`);
+    console.log(`[Sift] Found ${userMessages.length} user messages, ${aiMessages.length} AI messages`);
     
-    if (fullText === lastProcessedText && !isInitialLoad) return;
-    if (fullText.length < 30) return;
-
-    const lowerText = fullText.toLowerCase();
-    const hasShoppingKeywords = SHOPPING_KEYWORDS.some(kw => lowerText.includes(kw));
-    const hasProductCategory = PRODUCT_CATEGORIES.some(cat => lowerText.includes(cat));
-
-    if (!hasShoppingKeywords && !hasProductCategory) {
-      console.log('[Sift] Not product research');
+    if (userMessages.length === 0) {
+      console.log('[Sift] No user messages found');
       return;
     }
 
-    const context = extractProductContext(userMessages, aiMessages, fullText);
+    // Get the most recent user messages
+    const recentUserMessages = userMessages.slice(-3);
+    const combinedUserText = recentUserMessages.join(' ').toLowerCase();
     
-    if (context.query || context.requirements.length > 0) {
-      const contextString = JSON.stringify(context);
-      if (contextString !== lastProcessedText || isInitialLoad) {
-        lastProcessedText = fullText;
+    // Check if this looks like shopping research
+    const hasShoppingSignal = SHOPPING_SIGNALS.some(s => combinedUserText.includes(s));
+    
+    if (!hasShoppingSignal) {
+      console.log('[Sift] No shopping signals detected');
+      return;
+    }
+
+    // Skip if no meaningful change
+    const textHash = recentUserMessages.join('|');
+    if (textHash === lastProcessedText && !isInitialLoad) {
+      return;
+    }
+    lastProcessedText = textHash;
+
+    // Extract context - use the actual user message as the query
+    const context = extractProductContext(recentUserMessages, aiMessages);
+    
+    if (context.query) {
+      try {
+        await browser.runtime.sendMessage({
+          type: 'SAVE_CONTEXT',
+          context: {
+            ...context,
+            timestamp: Date.now(),
+            source: 'chatgpt',
+            conversationId: currentConversationId,
+          },
+        });
         
-        // Try to send message, handle context invalidation
-        try {
-          await browser.runtime.sendMessage({
-            type: 'SAVE_CONTEXT',
-            context: {
-              ...context,
-              timestamp: Date.now(),
-              source: 'chatgpt',
-              conversationId: currentConversationId,
-            },
-          });
-          
-          console.log('[Sift] Context captured:', context.query, context.requirements);
-          showCaptureIndicator(context);
-        } catch (error) {
-          if (String(error).includes('Extension context invalidated')) {
-            isContextValid = false;
-            showRefreshMessage();
-          } else {
-            console.error('[Sift] Error sending context:', error);
-          }
+        console.log('[Sift] Context saved:', context);
+        showCaptureIndicator(context);
+      } catch (error) {
+        if (String(error).includes('Extension context invalidated')) {
+          isContextValid = false;
+          showRefreshMessage();
         }
       }
     }
@@ -198,140 +179,110 @@ async function processConversation(isInitialLoad: boolean) {
       isContextValid = false;
       showRefreshMessage();
     } else {
-      console.error('[Sift] Error processing conversation:', error);
+      console.error('[Sift] Error:', error);
     }
   }
 }
 
-function extractConversation(): { userMessages: string[]; aiMessages: string[]; fullText: string } {
+function extractConversation(): { userMessages: string[]; aiMessages: string[] } {
   const userMessages: string[] = [];
   const aiMessages: string[] = [];
   
-  // Get USER messages - they're in the bubble div
+  // Get USER messages
   document.querySelectorAll('[data-message-author-role="user"]').forEach(el => {
     const text = el.textContent?.trim();
-    if (text) userMessages.push(text);
+    if (text && text.length > 5) userMessages.push(text);
   });
   
-  // Get AI messages - they're in .markdown inside assistant role
+  // Get AI messages (just first paragraph for context)
   document.querySelectorAll('[data-message-author-role="assistant"] .markdown').forEach(el => {
     const text = el.textContent?.trim();
-    if (text) aiMessages.push(text);
+    if (text) aiMessages.push(text.slice(0, 500));
   });
 
-  // Combine recent messages
-  const allMessages = [
-    ...userMessages.slice(-3).map(m => `USER: ${m}`),
-    ...aiMessages.slice(-2).map(m => `AI: ${m.slice(0, 1000)}`),
-  ];
-
-  return {
-    userMessages,
-    aiMessages,
-    fullText: allMessages.join('\n\n'),
-  };
+  return { userMessages, aiMessages };
 }
 
 function extractProductContext(
   userMessages: string[], 
-  aiMessages: string[],
-  fullText: string
-): { query: string; requirements: string[] } {
-  const lowerText = fullText.toLowerCase();
-  const userText = userMessages.join(' ').toLowerCase();
+  aiMessages: string[]
+): { query: string; requirements: string[]; rawUserMessage: string } {
+  // Use the most specific user message as the query
+  // Usually the first message in a shopping conversation is the main question
+  const mainMessage = userMessages[0] || '';
+  const allUserText = userMessages.join(' ').toLowerCase();
   
-  let query = '';
-  const sortedCategories = [...PRODUCT_CATEGORIES].sort((a, b) => b.length - a.length);
+  // Clean up the query - remove common prefixes
+  let query = mainMessage
+    .replace(/^(what('s| is| are) the |what |which |can you |please |i need |i want |i'm looking for |looking for |find me |recommend |best )/i, '')
+    .replace(/\?+$/, '')
+    .trim();
   
-  // Check user messages first
-  for (const category of sortedCategories) {
-    if (userText.includes(category)) {
-      query = category;
-      console.log('[Sift] Found category in USER message:', category);
-      break;
-    }
-  }
-  
-  // Fall back to full conversation
-  if (!query) {
-    for (const category of sortedCategories) {
-      if (lowerText.includes(category)) {
-        query = category;
-        console.log('[Sift] Found category in conversation:', category);
-        break;
-      }
-    }
-  }
-
-  // Try pattern extraction
-  if (!query) {
-    const patterns = [
-      /looking for (?:a |an |some )?(?:good |great |best )?([^.,!?\n]+)/i,
-      /need (?:a |an |some )?(?:good |great |new )?([^.,!?\n]+)/i,
-      /want (?:a |an |some )?(?:good |great |new )?([^.,!?\n]+)/i,
-      /recommend(?:ation)?s? (?:for |on )?(?:a |an |some )?([^.,!?\n]+)/i,
-      /best ([^.,!?\n]+?) (?:for|under|around|that)/i,
-      /shopping for (?:a |an |some )?([^.,!?\n]+)/i,
-      /buy(?:ing)? (?:a |an |some )?([^.,!?\n]+)/i,
-      /help (?:me )?(?:find|choose|pick|select) (?:a |an |some )?([^.,!?\n]+)/i,
-    ];
-
-    for (const userMsg of userMessages) {
-      for (const pattern of patterns) {
-        const match = userMsg.match(pattern);
-        if (match && match[1] && match[1].length > 3) {
-          query = match[1].trim().slice(0, 60);
-          console.log('[Sift] Extracted query from user message:', query);
-          break;
-        }
-      }
-      if (query) break;
+  // If query is too long, extract the core product
+  if (query.length > 80) {
+    // Try to find a product pattern
+    const productMatch = mainMessage.match(
+      /(?:best|top|good|recommend[^\s]*)\s+(.+?)(?:\s+(?:for|under|with|that|which|\?))/i
+    );
+    if (productMatch) {
+      query = productMatch[1].trim();
+    } else {
+      // Just take first 80 chars at word boundary
+      query = query.slice(0, 80).replace(/\s+\S*$/, '');
     }
   }
 
+  // Extract requirements from user messages
   const requirements: string[] = [];
 
-  // Price patterns
-  const pricePatterns = [
-    /under \$?(\d+)/i,
-    /less than \$?(\d+)/i,
-    /budget (?:of |is |around )?\$?(\d+)/i,
-    /\$(\d+) (?:or less|max|maximum|budget)/i,
-    /around \$?(\d+)/i,
-    /(\d+) (?:dollars|bucks)/i,
-  ];
+  // Price requirements
+  const priceMatch = allUserText.match(/(?:under|less than|budget[:\s]*|max[:\s]*|around)\s*\$?\s*(\d+)/i);
+  if (priceMatch) {
+    requirements.push(`budget: under $${priceMatch[1]}`);
+  }
 
-  for (const pattern of pricePatterns) {
-    const match = userText.match(pattern) || fullText.match(pattern);
-    if (match) {
-      requirements.push(`budget under $${match[1]}`);
-      break;
+  // "No X" requirements (like "no fluoride", "no plastic")
+  const noMatches = allUserText.matchAll(/\bno\s+(\w+(?:\s+\w+)?)/gi);
+  for (const match of noMatches) {
+    const item = match[1].toLowerCase();
+    if (!['the', 'a', 'an', 'more', 'less', 'need'].includes(item)) {
+      requirements.push(`no ${item}`);
     }
   }
 
-  // Feature keywords
-  const requirementKeywords = [
-    'no plastic', 'without plastic', 'plastic-free', 'stainless steel', 'metal', 'leather', 'canvas',
-    'durable', 'reliable', 'long-lasting', 'quality', 'premium', 'professional',
-    'heavy duty', 'lightweight', 'portable', 'compact',
-    'comfortable', 'wide fit', 'narrow fit', 'cushioning', 'arch support', 'breathable',
-    'waterproof', 'water resistant', 'insulated',
-    'minimalist', 'modern', 'classic', 'casual', 'formal',
-    'wireless', 'bluetooth', 'noise cancelling', 'long battery',
+  // "With X" or "must have X" requirements
+  const withMatches = allUserText.matchAll(/(?:with|must have|needs?|want)\s+(\w+(?:\s+\w+)?)/gi);
+  for (const match of withMatches) {
+    const item = match[1].toLowerCase();
+    if (item.length > 2 && !['the', 'a', 'an', 'to', 'be'].includes(item)) {
+      requirements.push(item);
+    }
+  }
+
+  // Common quality keywords
+  const qualityKeywords = [
+    'durable', 'reliable', 'quality', 'premium', 'professional', 'heavy duty',
+    'lightweight', 'portable', 'compact', 'waterproof', 'wireless', 'quiet',
+    'efficient', 'eco-friendly', 'organic', 'natural', 'stainless steel',
   ];
   
-  for (const kw of requirementKeywords) {
-    if (userText.includes(kw) || lowerText.includes(kw)) {
+  for (const kw of qualityKeywords) {
+    if (allUserText.includes(kw) && !requirements.includes(kw)) {
       requirements.push(kw);
     }
   }
 
-  const uniqueReqs = [...new Set(requirements)].slice(0, 10);
-  return { query, requirements: uniqueReqs };
+  // Dedupe and limit
+  const uniqueReqs = [...new Set(requirements)].slice(0, 8);
+
+  return { 
+    query, 
+    requirements: uniqueReqs,
+    rawUserMessage: mainMessage,
+  };
 }
 
 function showRefreshMessage() {
-  // Remove any existing indicators
   document.getElementById('sift-capture-indicator')?.remove();
   document.getElementById('sift-refresh-message')?.remove();
   
@@ -350,23 +301,17 @@ function showRefreshMessage() {
       font-size: 14px;
       box-shadow: 0 4px 20px rgba(245, 158, 11, 0.4);
       z-index: 10000;
-      max-width: 280px;
       cursor: pointer;
     " onclick="location.reload()">
       <div style="display: flex; align-items: center; gap: 10px;">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M23 4v6h-6"></path>
-          <path d="M1 20v-6h6"></path>
-          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-        </svg>
+        <span style="font-size: 18px;">🔄</span>
         <div>
           <div style="font-weight: 600;">Sift needs refresh</div>
-          <div style="font-size: 12px; opacity: 0.9; margin-top: 2px;">Click here to reload page</div>
+          <div style="font-size: 12px; opacity: 0.9;">Click to reload</div>
         </div>
       </div>
     </div>
   `;
-  
   document.body.appendChild(msg);
 }
 
@@ -374,8 +319,6 @@ function showCaptureIndicator(context: { query: string; requirements: string[] }
   document.getElementById('sift-capture-indicator')?.remove();
   document.getElementById('sift-refresh-message')?.remove();
 
-  const reqPreview = context.requirements.slice(0, 3).join(', ');
-  
   const indicator = document.createElement('div');
   indicator.id = 'sift-capture-indicator';
   indicator.innerHTML = `
@@ -385,32 +328,31 @@ function showCaptureIndicator(context: { query: string; requirements: string[] }
       right: 20px;
       background: linear-gradient(135deg, #10b981 0%, #059669 100%);
       color: white;
-      padding: 12px 16px;
+      padding: 14px 18px;
       border-radius: 12px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       font-size: 13px;
       box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4);
       z-index: 10000;
-      max-width: 300px;
-      animation: sift-slide-in 0.3s ease-out;
+      max-width: 320px;
     ">
-      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
-        <span style="font-weight: 600;">Sift captured your search</span>
-      </div>
-      <div style="font-size: 12px; opacity: 0.9;">
-        ${context.query ? `<div style="margin-bottom: 4px;">"${context.query}"</div>` : ''}
-        ${reqPreview ? `<div style="font-size: 11px; opacity: 0.8;">${reqPreview}</div>` : ''}
+      <div style="display: flex; align-items: flex-start; gap: 10px;">
+        <span style="font-size: 18px;">✓</span>
+        <div>
+          <div style="font-weight: 600; margin-bottom: 6px;">Sift captured your search</div>
+          <div style="font-size: 12px; background: rgba(0,0,0,0.2); padding: 8px 10px; border-radius: 6px; margin-bottom: 6px;">
+            "${context.query.slice(0, 60)}${context.query.length > 60 ? '...' : ''}"
+          </div>
+          ${context.requirements.length > 0 ? `
+            <div style="font-size: 11px; opacity: 0.9; display: flex; flex-wrap: wrap; gap: 4px;">
+              ${context.requirements.slice(0, 4).map(r => 
+                `<span style="background: rgba(255,255,255,0.2); padding: 2px 6px; border-radius: 4px;">${r}</span>`
+              ).join('')}
+            </div>
+          ` : ''}
+        </div>
       </div>
     </div>
-    <style>
-      @keyframes sift-slide-in {
-        from { transform: translateX(100px); opacity: 0; }
-        to { transform: translateX(0); opacity: 1; }
-      }
-    </style>
   `;
 
   document.body.appendChild(indicator);
@@ -420,5 +362,5 @@ function showCaptureIndicator(context: { query: string; requirements: string[] }
     indicator.style.opacity = '0';
     indicator.style.transform = 'translateX(20px)';
     setTimeout(() => indicator.remove(), 300);
-  }, 4000);
+  }, 5000);
 }
