@@ -1,139 +1,136 @@
-# Path to MVP: Executive Summary
+# Path to MVP: Honey-Style Extension
 
-## TL;DR
+## The Product in One Sentence
 
-**Can we build this? YES, with modifications.**
-
-The original vision of "connecting to ChatGPT" isn't possible via official API, but we can achieve the same outcome through DOM scraping (fragile but works) or by building our own chat interface (more robust).
+**"Honey for AI shopping research"** - silently captures your ChatGPT product research, pops up with best matches when you land on a shopping site.
 
 ---
 
-## Recommended Approach
-
-### Start Here: "ChatGPT Companion" Extension
+## Core Loop
 
 ```
-Week 1-2:  Foundation & Setup
-Week 3-4:  ChatGPT context capture (DOM scraping)  
-Week 5-6:  Product page analysis (AI-powered)
-Week 7-8:  UI & user experience
-Week 9-10: Testing & Chrome Web Store launch
+ChatGPT: User researches "espresso machine, no plastic, <$500"
+            │
+            │  Extension silently captures context
+            ▼
+User: Clicks link or goes to Amazon
+            │
+            │  Extension activates
+            ▼
+Overlay: "🎯 3 products match your needs"
+         #1 Breville - 94% match [View]
+         #2 Gaggia - 87% match [View]
 ```
 
-**Total: ~10 weeks to functional MVP**
+**Time to value: < 2 seconds**
 
 ---
 
-## Key Technical Decisions
+## 4-Week Build Plan
 
-### 1. How to get ChatGPT context?
-**→ DOM Scraping** (MVP) with manual fallback
-
-```
-Pros: Works now, captures real conversation
-Cons: Fragile, may break with ChatGPT updates
-Plan: Build robust selectors, monitor for changes
-```
-
-### 2. How to analyze products?
-**→ Hybrid approach**
-
-```
-1. Extract structured data (JSON-LD) - FREE, fast
-2. Parse HTML with site-specific selectors - FREE, reliable
-3. Fall back to LLM analysis - ~$0.003/page
-```
-
-### 3. Where to call OpenAI?
-**→ Backend (Firebase Cloud Functions)**
-
-```
-Reasons:
-- API keys never exposed to browser
-- Rate limiting enforced server-side
-- Usage tracking for billing
-- Can cache responses
-```
-
-### 4. How to monetize?
-**→ Freemium model**
-
-```
-Free:  5 analyses/day
-Pro:   Unlimited @ $5/month
-
-Break-even: ~250 paying users
-```
+| Week | Focus | Deliverable |
+|------|-------|-------------|
+| **1** | Foundation | Extension captures ChatGPT context |
+| **2** | Shopping | Scrapes products, calls AI, gets rankings |
+| **3** | UI | Honey-style overlay slides in |
+| **4** | Polish | Speed, errors, Chrome Web Store |
 
 ---
 
-## What Makes This Work
-
-| Component | Solution | Confidence |
-|-----------|----------|------------|
-| Get user's requirements | Parse ChatGPT conversation | 🟡 MEDIUM (fragile) |
-| Know when to activate | Detect navigation from ChatGPT | 🟢 HIGH |
-| Understand products | AI + structured data extraction | 🟢 HIGH |
-| Show useful results | Overlay UI on product pages | 🟢 HIGH |
-
----
-
-## What Could Kill This
-
-1. **ChatGPT DOM changes frequently** → Need monitoring + quick updates
-2. **OpenAI blocks extension** → Unlikely if we're respectful
-3. **E-commerce sites block scraping** → Multiple fallback strategies
-4. **Users don't find it valuable** → MVP validation critical
-
----
-
-## Next Steps
-
-1. **Create project structure** (this session)
-2. **Build extension scaffold** with Manifest V3
-3. **Implement ChatGPT content script** first (highest risk)
-4. **Validate with 5-10 beta users** before full build
-
----
-
-## Quick Cost Math
+## What We're Building (Minimal)
 
 ```
-Per analysis:     ~$0.006 (OpenAI)
-Per user/month:   ~$0.12 (20 analyses)
-Free tier cost:   $120/month @ 1000 users
-Revenue needed:   24 paying users @ $5 = $120
+extension/
+├── manifest.json        # Permissions
+├── background.ts        # Orchestration
+├── chatgpt.ts          # Capture context
+├── shopping.ts         # Show overlay
+└── overlay.css         # Styling
+```
 
-Verdict: Sustainable with modest conversion
+**That's it.** No settings, no accounts, no complexity.
+
+---
+
+## What We're NOT Building (MVP)
+
+- ❌ User accounts
+- ❌ Settings page
+- ❌ History/saved searches
+- ❌ Cross-site comparison
+- ❌ Price tracking
+- ❌ Complex UI
+
+---
+
+## Technical Decisions
+
+| Decision | Choice | Why |
+|----------|--------|-----|
+| Context capture | DOM scraping | Only option; accept fragility |
+| Product parsing | Site-specific selectors | Faster than AI parsing |
+| AI model | GPT-4.1-mini | Fast + cheap (~$0.005/call) |
+| Backend | Firebase Functions | Simple, serverless |
+| UI framework | Vanilla JS/CSS | Lighter, faster |
+
+---
+
+## Speed Requirements
+
+| Action | Target |
+|--------|--------|
+| Context capture | < 100ms |
+| Page detection | < 50ms |
+| Product scraping | < 500ms |
+| AI ranking | < 1500ms |
+| **Total** | **< 2 seconds** |
+
+---
+
+## Cost Model
+
+```
+Per AI call:      $0.005
+Per user/day:     2 calls = $0.01
+Per user/month:   $0.30
+
+1,000 users:      $300/month
+Break-even:       60 users @ $5/month (or affiliate revenue)
 ```
 
 ---
 
-## Alternative Paths
+## Risks & Mitigations
 
-If ChatGPT integration proves too fragile:
-
-### Option B: Standalone AI Shopping Assistant
-- Build our own chat interface
-- Use OpenAI API directly (reliable)
-- Same product analysis features
-- No ChatGPT dependency
-
-### Option C: Browser-Wide Context
-- Track all shopping-related browsing
-- Build user profile from behavior
-- Less accurate but more robust
+| Risk | Mitigation |
+|------|------------|
+| ChatGPT DOM changes | Monitor daily, fast update process |
+| Slow API response | Use GPT-4.1-mini, cache aggressively |
+| Low accuracy | User feedback loop, iterate on prompts |
 
 ---
 
-## Go/No-Go Checklist
+## Success Criteria
 
-Before building, validate:
+**Week 4 ship if:**
+- [ ] Captures ChatGPT context reliably (>90%)
+- [ ] Overlay appears in <2 seconds
+- [ ] Rankings feel accurate (user testing)
+- [ ] Works on Amazon (minimum)
 
-- [ ] Can we reliably extract ChatGPT conversations? (build prototype)
-- [ ] Do users actually want this? (user interviews)
-- [ ] Can we parse major e-commerce sites? (build parsers)
-- [ ] Is the value prop clear? (landing page test)
+---
 
-**Recommendation: Build weeks 1-4 as spike to validate feasibility before full commitment.**
+## Go Decision
 
+Before full build, validate in Week 1:
+- [ ] Can we reliably scrape ChatGPT conversations?
+- [ ] Can we detect product links being clicked?
+
+If YES → Continue to Week 2
+If NO → Pivot to manual context input
+
+---
+
+## Next Step
+
+**Build the extension scaffold and ChatGPT content script first** - this is the highest-risk technical component. If it works reliably, everything else is straightforward.
