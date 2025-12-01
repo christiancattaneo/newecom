@@ -42,16 +42,23 @@ let overlayElement: HTMLElement | null = null;
 let isAnalyzing = false;
 
 async function initShoppingAssistant() {
+  console.log('[Sift] Initializing shopping assistant on:', window.location.href);
+  
   // Check if we have context from ChatGPT research
   const result = await browser.runtime.sendMessage({ type: 'CHECK_CONTEXT_EXISTS' });
+  console.log('[Sift] Context check result:', result);
   
   if (result?.exists && result.context) {
-    console.log('[Sift] Context found, analyzing page...');
-    await analyzeCurrentPage(result.context);
+    console.log('[Sift] Context found:', result.context.query);
+    // Small delay to let page fully load
+    setTimeout(() => analyzeCurrentPage(result.context), 1500);
+  } else {
+    console.log('[Sift] No context available - research a product in ChatGPT first');
   }
 
   // Listen for context updates
   browser.runtime.onMessage.addListener((message) => {
+    console.log('[Sift] Received message:', message.type);
     if (message.type === 'CONTEXT_AVAILABLE') {
       browser.runtime.sendMessage({ type: 'GET_CONTEXT' }).then((context) => {
         if (context) {
@@ -63,8 +70,12 @@ async function initShoppingAssistant() {
 }
 
 async function analyzeCurrentPage(context: ProductContext) {
-  if (isAnalyzing) return;
+  if (isAnalyzing) {
+    console.log('[Sift] Already analyzing, skipping');
+    return;
+  }
   isAnalyzing = true;
+  console.log('[Sift] Starting page analysis for:', context.query);
 
   try {
     // Show loading state
@@ -72,12 +83,16 @@ async function analyzeCurrentPage(context: ProductContext) {
 
     // Scrape products from current page
     const products = scrapeProducts();
+    console.log('[Sift] Scraped products:', products.length);
     
     if (products.length === 0) {
-      hideOverlay();
+      console.log('[Sift] No products found on page');
+      showOverlay({ error: 'No products found on this page. Try a search results page.', context });
       isAnalyzing = false;
       return;
     }
+    
+    console.log('[Sift] First product:', products[0]?.title?.slice(0, 50));
 
     // Get rankings from backend
     const result = await browser.runtime.sendMessage({
@@ -126,48 +141,104 @@ function scrapeProducts(): ProductData[] {
 
 function scrapeAmazon(): ProductData[] {
   const products: ProductData[] = [];
+  console.log('[Sift] Scraping Amazon page...');
   
-  // Search results page
-  const searchItems = document.querySelectorAll('[data-component-type="s-search-result"]');
+  // Search results page - multiple selector strategies
+  const searchSelectors = [
+    '[data-component-type="s-search-result"]',
+    '[data-asin]:not([data-asin=""])',
+    '.s-result-item[data-asin]',
+    '.sg-col-inner .s-result-item',
+  ];
   
-  searchItems.forEach((item, index) => {
-    if (index >= 10) return; // Limit to 10 products
-    
-    const titleEl = item.querySelector('h2 a span, .a-text-normal');
-    const priceEl = item.querySelector('.a-price .a-offscreen');
-    const linkEl = item.querySelector('h2 a, a.a-link-normal');
-    const imageEl = item.querySelector('img.s-image');
-    
-    if (titleEl && linkEl) {
-      const priceText = priceEl?.textContent?.replace(/[^0-9.]/g, '') || '';
-      
-      products.push({
-        title: titleEl.textContent?.trim() || '',
-        price: priceText ? parseFloat(priceText) : null,
-        url: (linkEl as HTMLAnchorElement).href,
-        description: '', // Would need more scraping
-        imageUrl: (imageEl as HTMLImageElement)?.src,
-      });
+  let searchItems: NodeListOf<Element> | null = null;
+  for (const selector of searchSelectors) {
+    const items = document.querySelectorAll(selector);
+    if (items.length > 0) {
+      searchItems = items;
+      console.log('[Sift] Found items with selector:', selector, 'count:', items.length);
+      break;
     }
-  });
+  }
+  
+  if (searchItems) {
+    searchItems.forEach((item, index) => {
+      if (index >= 10) return; // Limit to 10 products
+      
+      // Multiple title selectors
+      const titleEl = item.querySelector('h2 a span') || 
+                      item.querySelector('h2 span') ||
+                      item.querySelector('.a-text-normal') ||
+                      item.querySelector('[data-cy="title-recipe"] span') ||
+                      item.querySelector('.a-link-normal .a-text-normal');
+      
+      // Multiple price selectors
+      const priceEl = item.querySelector('.a-price .a-offscreen') ||
+                      item.querySelector('.a-price-whole') ||
+                      item.querySelector('[data-cy="price-recipe"] .a-offscreen');
+      
+      // Link selectors
+      const linkEl = item.querySelector('h2 a') || 
+                     item.querySelector('a.a-link-normal[href*="/dp/"]') ||
+                     item.querySelector('a[href*="/dp/"]');
+      
+      const imageEl = item.querySelector('img.s-image') || item.querySelector('img[data-image-latency]');
+      
+      if (titleEl) {
+        const priceText = priceEl?.textContent?.replace(/[^0-9.]/g, '') || '';
+        const url = linkEl ? (linkEl as HTMLAnchorElement).href : window.location.href;
+        
+        products.push({
+          title: titleEl.textContent?.trim() || '',
+          price: priceText ? parseFloat(priceText) : null,
+          url,
+          description: '',
+          imageUrl: (imageEl as HTMLImageElement)?.src,
+        });
+      }
+    });
+  }
 
   // Single product page
   if (products.length === 0) {
-    const title = document.querySelector('#productTitle')?.textContent?.trim();
-    const priceEl = document.querySelector('.a-price .a-offscreen, #priceblock_ourprice, #priceblock_dealprice');
-    const priceText = priceEl?.textContent?.replace(/[^0-9.]/g, '') || '';
+    console.log('[Sift] Checking for single product page...');
+    const title = document.querySelector('#productTitle')?.textContent?.trim() ||
+                  document.querySelector('#title span')?.textContent?.trim();
+    
+    const priceSelectors = [
+      '.a-price .a-offscreen',
+      '#priceblock_ourprice',
+      '#priceblock_dealprice', 
+      '.a-price-whole',
+      '#corePrice_feature_div .a-offscreen',
+      '.priceToPay .a-offscreen',
+    ];
+    
+    let priceText = '';
+    for (const sel of priceSelectors) {
+      const el = document.querySelector(sel);
+      if (el?.textContent) {
+        priceText = el.textContent.replace(/[^0-9.]/g, '');
+        break;
+      }
+    }
     
     if (title) {
+      console.log('[Sift] Found single product:', title.slice(0, 50));
+      const features = document.querySelector('#feature-bullets')?.textContent?.trim() || 
+                       document.querySelector('#productDescription')?.textContent?.trim() || '';
+      
       products.push({
         title,
         price: priceText ? parseFloat(priceText) : null,
         url: window.location.href,
-        description: document.querySelector('#feature-bullets')?.textContent?.trim() || '',
-        imageUrl: (document.querySelector('#landingImage') as HTMLImageElement)?.src,
+        description: features.slice(0, 500),
+        imageUrl: (document.querySelector('#landingImage, #imgBlkFront') as HTMLImageElement)?.src,
       });
     }
   }
 
+  console.log('[Sift] Amazon scrape result:', products.length, 'products');
   return products;
 }
 
