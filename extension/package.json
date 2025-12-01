@@ -10,10 +10,15 @@
     "build:firefox": "wxt build -b firefox",
     "zip": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "jsdom": "^27.2.0",
     "typescript": "^5.3.3",
+    "vitest": "^4.0.14",
     "wxt": "^0.20.11"
   },
   "private": true
