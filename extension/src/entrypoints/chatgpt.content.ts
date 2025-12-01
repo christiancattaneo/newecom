@@ -1,6 +1,6 @@
 /**
  * ChatGPT Content Script
- * Captures product research context from ChatGPT conversations
+ * Captures ALL user prompts from ChatGPT
  */
 
 export default defineContentScript({
@@ -9,23 +9,12 @@ export default defineContentScript({
 
   main() {
     console.log('[Sift] ChatGPT content script loaded');
-    initContextCapture();
+    initCapture();
   },
 });
 
-let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-let lastProcessedText = '';
-let currentConversationId: string | null = null;
 let isContextValid = true;
-
-const DEBOUNCE_MS = 800;
-
-// Shopping intent signals
-const SHOPPING_SIGNALS = [
-  'best', 'recommend', 'buy', 'purchase', 'looking for', 'need', 'want',
-  'shopping', 'compare', 'vs', 'review', 'under $', 'budget', 'affordable',
-  'top', 'which', 'what should', 'suggestion', 'advice',
-];
+let lastCapturedPrompt = '';
 
 function checkExtensionContext(): boolean {
   try {
@@ -35,332 +24,271 @@ function checkExtensionContext(): boolean {
   }
 }
 
-function initContextCapture() {
+function initCapture() {
   if (!checkExtensionContext()) {
     showRefreshMessage();
     return;
   }
 
-  updateConversationId();
+  // Watch for form submissions (when user sends a message)
+  watchPromptSubmissions();
   
-  const observer = new MutationObserver(handleMutation);
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-    characterData: true,
+  // Also capture existing conversation on page load
+  captureExistingConversation();
+}
+
+function watchPromptSubmissions() {
+  // Method 1: Intercept Enter key or button click on the prompt form
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      const textarea = document.querySelector('textarea[data-id], #prompt-textarea, textarea[placeholder*="Message"]') as HTMLTextAreaElement;
+      if (textarea && document.activeElement === textarea) {
+        const prompt = textarea.value.trim();
+        if (prompt && prompt !== lastCapturedPrompt) {
+          lastCapturedPrompt = prompt;
+          capturePrompt(prompt);
+        }
+      }
+    }
+  }, true);
+
+  // Method 2: Watch for clicks on send button
+  document.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    const sendButton = target.closest('button[data-testid="send-button"], button[aria-label*="Send"]');
+    if (sendButton) {
+      const textarea = document.querySelector('textarea[data-id], #prompt-textarea, textarea[placeholder*="Message"]') as HTMLTextAreaElement;
+      if (textarea) {
+        const prompt = textarea.value.trim();
+        if (prompt && prompt !== lastCapturedPrompt) {
+          lastCapturedPrompt = prompt;
+          capturePrompt(prompt);
+        }
+      }
+    }
+  }, true);
+
+  // Method 3: MutationObserver to catch new user messages appearing
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (node instanceof HTMLElement) {
+          const userMessage = node.querySelector?.('[data-message-author-role="user"]') || 
+                             (node.matches?.('[data-message-author-role="user"]') ? node : null);
+          if (userMessage) {
+            const text = userMessage.textContent?.trim();
+            if (text && text !== lastCapturedPrompt && text.length > 3) {
+              lastCapturedPrompt = text;
+              capturePrompt(text);
+            }
+          }
+        }
+      }
+    }
   });
 
-  setupUrlChangeListener();
-
-  console.log('[Sift] Processing existing conversation...');
-  setTimeout(() => processConversation(true), 500);
-  setTimeout(() => processConversation(true), 2000);
+  observer.observe(document.body, { childList: true, subtree: true });
 }
 
-function updateConversationId() {
-  const match = window.location.pathname.match(/\/c\/([a-zA-Z0-9-]+)/);
-  const newId = match ? match[1] : null;
-  
-  if (newId !== currentConversationId) {
-    console.log('[Sift] Conversation changed:', newId);
-    currentConversationId = newId;
-    lastProcessedText = '';
-    return true;
-  }
-  return false;
-}
-
-function setupUrlChangeListener() {
-  const originalPushState = history.pushState;
-  history.pushState = function(...args) {
-    originalPushState.apply(this, args);
-    handleUrlChange();
-  };
-
-  const originalReplaceState = history.replaceState;
-  history.replaceState = function(...args) {
-    originalReplaceState.apply(this, args);
-    handleUrlChange();
-  };
-
-  window.addEventListener('popstate', handleUrlChange);
-}
-
-function handleUrlChange() {
-  if (!checkExtensionContext()) {
-    showRefreshMessage();
-    return;
-  }
-  
-  if (updateConversationId()) {
-    console.log('[Sift] URL changed, processing new conversation...');
-    setTimeout(() => processConversation(true), 1000);
-  }
-}
-
-function handleMutation(mutations: MutationRecord[]) {
-  if (!isContextValid) return;
-  
-  const isRelevant = mutations.some(mutation => {
-    const target = mutation.target as HTMLElement;
-    return target.closest?.('[data-message-author-role]') || 
-           target.closest?.('.markdown') ||
-           target.closest?.('.user-message-bubble-color');
+function captureExistingConversation() {
+  // Get all user messages from existing conversation
+  const userMessages: string[] = [];
+  document.querySelectorAll('[data-message-author-role="user"]').forEach(el => {
+    const text = el.textContent?.trim();
+    if (text && text.length > 3) userMessages.push(text);
   });
 
-  if (isRelevant) {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => processConversation(false), DEBOUNCE_MS);
+  if (userMessages.length > 0) {
+    // Use most recent user message as the main context
+    const latestPrompt = userMessages[userMessages.length - 1];
+    const allPrompts = userMessages.slice(-3); // Last 3 for context
+    
+    console.log('[Sift] Found existing conversation:', userMessages.length, 'messages');
+    capturePrompt(latestPrompt, allPrompts);
   }
 }
 
-async function processConversation(isInitialLoad: boolean) {
+async function capturePrompt(prompt: string, additionalContext?: string[]) {
   if (!checkExtensionContext()) {
     isContextValid = false;
     showRefreshMessage();
     return;
   }
 
+  console.log('[Sift] Capturing prompt:', prompt.slice(0, 100));
+
+  // Extract structured data from the prompt
+  const context = parsePrompt(prompt, additionalContext);
+
   try {
-    const { userMessages, aiMessages } = extractConversation();
+    await browser.runtime.sendMessage({
+      type: 'SAVE_CONTEXT',
+      context: {
+        ...context,
+        timestamp: Date.now(),
+        source: 'chatgpt',
+      },
+    });
     
-    console.log(`[Sift] Found ${userMessages.length} user messages, ${aiMessages.length} AI messages`);
-    
-    if (userMessages.length === 0) {
-      console.log('[Sift] No user messages found');
-      return;
-    }
-
-    // Get the most recent user messages
-    const recentUserMessages = userMessages.slice(-3);
-    const combinedUserText = recentUserMessages.join(' ').toLowerCase();
-    
-    // Check if this looks like shopping research
-    const hasShoppingSignal = SHOPPING_SIGNALS.some(s => combinedUserText.includes(s));
-    
-    if (!hasShoppingSignal) {
-      console.log('[Sift] No shopping signals detected');
-      return;
-    }
-
-    // Skip if no meaningful change
-    const textHash = recentUserMessages.join('|');
-    if (textHash === lastProcessedText && !isInitialLoad) {
-      return;
-    }
-    lastProcessedText = textHash;
-
-    // Extract context - use the actual user message as the query
-    const context = extractProductContext(recentUserMessages, aiMessages);
-    
-    if (context.query) {
-      try {
-        await browser.runtime.sendMessage({
-          type: 'SAVE_CONTEXT',
-          context: {
-            ...context,
-            timestamp: Date.now(),
-            source: 'chatgpt',
-            conversationId: currentConversationId,
-          },
-        });
-        
-        console.log('[Sift] Context saved:', context);
-        showCaptureIndicator(context);
-      } catch (error) {
-        if (String(error).includes('Extension context invalidated')) {
-          isContextValid = false;
-          showRefreshMessage();
-        }
-      }
-    }
+    console.log('[Sift] Context saved:', context);
+    showCaptureIndicator(context);
   } catch (error) {
     if (String(error).includes('Extension context invalidated')) {
       isContextValid = false;
       showRefreshMessage();
     } else {
-      console.error('[Sift] Error:', error);
+      console.error('[Sift] Error saving context:', error);
     }
   }
 }
 
-function extractConversation(): { userMessages: string[]; aiMessages: string[] } {
-  const userMessages: string[] = [];
-  const aiMessages: string[] = [];
-  
-  // Get USER messages
-  document.querySelectorAll('[data-message-author-role="user"]').forEach(el => {
-    const text = el.textContent?.trim();
-    if (text && text.length > 5) userMessages.push(text);
-  });
-  
-  // Get AI messages (just first paragraph for context)
-  document.querySelectorAll('[data-message-author-role="assistant"] .markdown').forEach(el => {
-    const text = el.textContent?.trim();
-    if (text) aiMessages.push(text.slice(0, 500));
-  });
+function parsePrompt(prompt: string, additionalContext?: string[]): { 
+  query: string; 
+  requirements: string[]; 
+  rawPrompt: string;
+} {
+  const allText = additionalContext ? [...additionalContext, prompt].join(' ') : prompt;
+  const lowerText = allText.toLowerCase();
 
-  return { userMessages, aiMessages };
-}
-
-function extractProductContext(
-  userMessages: string[], 
-  aiMessages: string[]
-): { query: string; requirements: string[]; rawUserMessage: string } {
-  // Use the most specific user message as the query
-  // Usually the first message in a shopping conversation is the main question
-  const mainMessage = userMessages[0] || '';
-  const allUserText = userMessages.join(' ').toLowerCase();
-  
-  // Clean up the query - remove common prefixes
-  let query = mainMessage
-    .replace(/^(what('s| is| are) the |what |which |can you |please |i need |i want |i'm looking for |looking for |find me |recommend |best )/i, '')
+  // The query is the prompt itself, cleaned up
+  let query = prompt
+    .replace(/^(hey |hi |hello |okay |ok |so |well |um |uh |please |can you |could you |would you |i need |i want |i'm looking for |looking for |help me find |find me |recommend |what('s| is| are) the )/gi, '')
     .replace(/\?+$/, '')
     .trim();
-  
-  // If query is too long, extract the core product
-  if (query.length > 80) {
-    // Try to find a product pattern
-    const productMatch = mainMessage.match(
-      /(?:best|top|good|recommend[^\s]*)\s+(.+?)(?:\s+(?:for|under|with|that|which|\?))/i
-    );
-    if (productMatch) {
-      query = productMatch[1].trim();
-    } else {
-      // Just take first 80 chars at word boundary
-      query = query.slice(0, 80).replace(/\s+\S*$/, '');
-    }
+
+  // Truncate if too long
+  if (query.length > 100) {
+    query = query.slice(0, 100).replace(/\s+\S*$/, '') + '...';
   }
 
-  // Extract requirements from user messages
+  // Extract requirements
   const requirements: string[] = [];
 
-  // Price requirements
-  const priceMatch = allUserText.match(/(?:under|less than|budget[:\s]*|max[:\s]*|around)\s*\$?\s*(\d+)/i);
+  // Price: "under $X", "budget $X", etc.
+  const priceMatch = lowerText.match(/(?:under|less than|max|budget|around)\s*\$?\s*(\d+)/i);
   if (priceMatch) {
-    requirements.push(`budget: under $${priceMatch[1]}`);
+    requirements.push(`under $${priceMatch[1]}`);
   }
 
-  // "No X" requirements (like "no fluoride", "no plastic")
-  const noMatches = allUserText.matchAll(/\bno\s+(\w+(?:\s+\w+)?)/gi);
+  // "No X" patterns: "no plastic", "no fluoride", etc.
+  const noMatches = lowerText.matchAll(/\bno\s+(\w+(?:\s+\w+)?)/gi);
   for (const match of noMatches) {
     const item = match[1].toLowerCase();
-    if (!['the', 'a', 'an', 'more', 'less', 'need'].includes(item)) {
+    if (item.length > 2 && !['the', 'a', 'an', 'more', 'less', 'need', 'one', 'way'].includes(item)) {
       requirements.push(`no ${item}`);
     }
   }
 
-  // "With X" or "must have X" requirements
-  const withMatches = allUserText.matchAll(/(?:with|must have|needs?|want)\s+(\w+(?:\s+\w+)?)/gi);
-  for (const match of withMatches) {
-    const item = match[1].toLowerCase();
-    if (item.length > 2 && !['the', 'a', 'an', 'to', 'be'].includes(item)) {
-      requirements.push(item);
-    }
+  // "Without X" patterns
+  const withoutMatches = lowerText.matchAll(/\bwithout\s+(\w+(?:\s+\w+)?)/gi);
+  for (const match of withoutMatches) {
+    requirements.push(`no ${match[1].toLowerCase()}`);
   }
 
-  // Common quality keywords
-  const qualityKeywords = [
-    'durable', 'reliable', 'quality', 'premium', 'professional', 'heavy duty',
-    'lightweight', 'portable', 'compact', 'waterproof', 'wireless', 'quiet',
-    'efficient', 'eco-friendly', 'organic', 'natural', 'stainless steel',
+  // "For X" patterns: "for gaming", "for travel", etc.
+  const forMatch = lowerText.match(/\bfor\s+([\w\s]+?)(?:\s+(?:that|which|under|with|and)|[,.]|$)/i);
+  if (forMatch && forMatch[1].length > 2 && forMatch[1].length < 30) {
+    requirements.push(`for ${forMatch[1].trim()}`);
+  }
+
+  // Quality/feature keywords
+  const featureKeywords = [
+    'durable', 'reliable', 'quiet', 'silent', 'fast', 'lightweight', 'portable',
+    'compact', 'waterproof', 'wireless', 'bluetooth', 'premium', 'professional',
+    'eco-friendly', 'organic', 'natural', 'stainless steel', 'heavy duty',
+    'long lasting', 'easy to clean', 'easy to use', 'beginner friendly',
   ];
   
-  for (const kw of qualityKeywords) {
-    if (allUserText.includes(kw) && !requirements.includes(kw)) {
+  for (const kw of featureKeywords) {
+    if (lowerText.includes(kw) && !requirements.some(r => r.includes(kw))) {
       requirements.push(kw);
     }
   }
 
-  // Dedupe and limit
-  const uniqueReqs = [...new Set(requirements)].slice(0, 8);
-
-  return { 
-    query, 
-    requirements: uniqueReqs,
-    rawUserMessage: mainMessage,
+  return {
+    query,
+    requirements: [...new Set(requirements)].slice(0, 8),
+    rawPrompt: prompt,
   };
 }
 
 function showRefreshMessage() {
-  document.getElementById('sift-capture-indicator')?.remove();
-  document.getElementById('sift-refresh-message')?.remove();
+  document.getElementById('sift-indicator')?.remove();
   
   const msg = document.createElement('div');
-  msg.id = 'sift-refresh-message';
+  msg.id = 'sift-indicator';
   msg.innerHTML = `
     <div style="
       position: fixed;
       bottom: 20px;
       right: 20px;
-      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+      background: #f59e0b;
       color: white;
-      padding: 14px 18px;
-      border-radius: 12px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-family: system-ui, sans-serif;
       font-size: 14px;
-      box-shadow: 0 4px 20px rgba(245, 158, 11, 0.4);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
       z-index: 10000;
       cursor: pointer;
     " onclick="location.reload()">
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <span style="font-size: 18px;">🔄</span>
-        <div>
-          <div style="font-weight: 600;">Sift needs refresh</div>
-          <div style="font-size: 12px; opacity: 0.9;">Click to reload</div>
-        </div>
-      </div>
+      🔄 Sift: Click to refresh page
     </div>
   `;
   document.body.appendChild(msg);
 }
 
 function showCaptureIndicator(context: { query: string; requirements: string[] }) {
-  document.getElementById('sift-capture-indicator')?.remove();
-  document.getElementById('sift-refresh-message')?.remove();
+  document.getElementById('sift-indicator')?.remove();
 
   const indicator = document.createElement('div');
-  indicator.id = 'sift-capture-indicator';
+  indicator.id = 'sift-indicator';
   indicator.innerHTML = `
     <div style="
       position: fixed;
       bottom: 20px;
       right: 20px;
-      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      background: linear-gradient(135deg, #10b981, #059669);
       color: white;
       padding: 14px 18px;
       border-radius: 12px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-family: system-ui, sans-serif;
       font-size: 13px;
       box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4);
       z-index: 10000;
-      max-width: 320px;
+      max-width: 340px;
     ">
-      <div style="display: flex; align-items: flex-start; gap: 10px;">
-        <span style="font-size: 18px;">✓</span>
-        <div>
-          <div style="font-weight: 600; margin-bottom: 6px;">Sift captured your search</div>
-          <div style="font-size: 12px; background: rgba(0,0,0,0.2); padding: 8px 10px; border-radius: 6px; margin-bottom: 6px;">
-            "${context.query.slice(0, 60)}${context.query.length > 60 ? '...' : ''}"
-          </div>
-          ${context.requirements.length > 0 ? `
-            <div style="font-size: 11px; opacity: 0.9; display: flex; flex-wrap: wrap; gap: 4px;">
-              ${context.requirements.slice(0, 4).map(r => 
-                `<span style="background: rgba(255,255,255,0.2); padding: 2px 6px; border-radius: 4px;">${r}</span>`
-              ).join('')}
-            </div>
-          ` : ''}
-        </div>
+      <div style="font-weight: 600; margin-bottom: 8px;">✓ Sift captured</div>
+      <div style="
+        font-size: 12px; 
+        background: rgba(0,0,0,0.15); 
+        padding: 8px 10px; 
+        border-radius: 6px;
+        line-height: 1.4;
+      ">
+        ${context.query.length > 80 ? context.query.slice(0, 80) + '...' : context.query}
       </div>
+      ${context.requirements.length > 0 ? `
+        <div style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px;">
+          ${context.requirements.slice(0, 5).map(r => 
+            `<span style="
+              font-size: 11px;
+              background: rgba(255,255,255,0.2);
+              padding: 3px 8px;
+              border-radius: 4px;
+            ">${r}</span>`
+          ).join('')}
+        </div>
+      ` : ''}
     </div>
   `;
 
   document.body.appendChild(indicator);
 
+  // Auto-hide after 4 seconds
   setTimeout(() => {
-    indicator.style.transition = 'opacity 0.3s, transform 0.3s';
+    indicator.style.transition = 'opacity 0.3s';
     indicator.style.opacity = '0';
-    indicator.style.transform = 'translateX(20px)';
     setTimeout(() => indicator.remove(), 300);
-  }, 5000);
+  }, 4000);
 }
