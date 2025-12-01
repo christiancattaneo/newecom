@@ -9,6 +9,13 @@ interface ProductContext {
   requirements: string[];
   timestamp: number;
   source: 'chatgpt' | 'manual';
+  mentionedProducts?: string[];
+  messageCount?: number;
+  conversationId?: string;
+  recentMessages?: Array<{
+    role: 'user' | 'assistant';
+    content: string;
+  }>;
 }
 
 interface ProductData {
@@ -131,6 +138,8 @@ async function rankProducts(products: ProductData[]): Promise<RankingResult | { 
         context: {
           query: context.query,
           requirements: context.requirements,
+          mentionedProducts: context.mentionedProducts || [],
+          recentMessages: context.recentMessages || [],
         },
         products,
       }),

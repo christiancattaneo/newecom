@@ -12,6 +12,11 @@ interface Env {
 interface ProductContext {
   query: string;
   requirements: string[];
+  mentionedProducts?: string[];
+  recentMessages?: Array<{
+    role: 'user' | 'assistant';
+    content: string;
+  }>;
 }
 
 interface ProductData {
@@ -232,45 +237,66 @@ function buildPrompt(context: ProductContext, products: ProductData[]): string {
     })
     .join('\n\n');
 
-  return `You are a sharp product analyst. User researched a product and now is shopping. Help them decide.
+  // Build conversation context if available
+  let conversationContext = '';
+  if (context.recentMessages && context.recentMessages.length > 0) {
+    conversationContext = `
+## Their research conversation:
+${context.recentMessages.map(m => `${m.role === 'user' ? 'USER' : 'AI'}: ${m.content.slice(0, 300)}${m.content.length > 300 ? '...' : ''}`).join('\n')}
+`;
+  }
+
+  // Products mentioned by ChatGPT
+  let mentionedContext = '';
+  if (context.mentionedProducts && context.mentionedProducts.length > 0) {
+    mentionedContext = `
+## Products ChatGPT recommended:
+${context.mentionedProducts.slice(0, 5).map(p => `• ${p}`).join('\n')}
+(If any of these are available, note the match!)
+`;
+  }
+
+  return `You are a sharp product analyst. User researched a product in ChatGPT and is now shopping. Help them decide.
 
 ## What they want:
 "${context.query}"
 
 ## Their requirements:
 ${context.requirements.length > 0 ? context.requirements.map(r => `• ${r}`).join('\n') : '• (No specific requirements stated)'}
-
-## Products available:
+${conversationContext}${mentionedContext}
+## Products on this page:
 ${productList}
 
-## Analyze each product:
-1. Does it match their requirements? Check EACH requirement.
-2. Is the rating good? (4.0+ is solid, 4.5+ is great)
-3. Enough reviews to trust? (100+ is decent, 1000+ is reliable)
-4. Price reasonable for what they get?
+## Your analysis:
+1. Does it match their SPECIFIC requirements? Check each one.
+2. Did ChatGPT mention this exact product? Huge plus if so.
+3. Rating good? (4.0+ solid, 4.5+ great)
+4. Enough reviews? (100+ decent, 1000+ reliable)
+5. Price within their budget or expectations?
 
 ## Response (JSON only):
 {
   "rankings": [
     { 
       "index": 0, 
-      "score": 85, 
+      "score": 92, 
       "reasons": [
+        "✓ ChatGPT specifically recommended this one",
         "✓ 4.6★ with 2,400 reviews - highly trusted",
-        "✓ Specifically mentions fluoride removal",
-        "⚠ At $45, slightly above budget but justified"
+        "✓ Description confirms fluoride removal",
+        "⚠ $45 is reasonable for quality"
       ] 
     }
   ],
-  "summary": "Quick 1-sentence verdict on best pick"
+  "summary": "Quick 1-sentence verdict"
 }
 
 Rules:
 - Score 0-100 based on requirement match + reviews + value
-- Only products scoring 50+ 
+- BONUS points if ChatGPT mentioned this product
+- Only products scoring 50+
 - Max 5 products
-- Be specific: cite actual features, prices, ratings
-- Reasons should directly reference their requirements`;
+- Be specific: cite actual features, prices, ratings`;
 }
 
 function parseAIResponse(content: string): RankProductsResponse {
