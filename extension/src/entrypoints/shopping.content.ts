@@ -50,23 +50,55 @@ async function initShoppingAssistant() {
   
   if (result?.exists && result.context) {
     console.log('[Sift] Context found:', result.context.query);
-    // Small delay to let page fully load
-    setTimeout(() => analyzeCurrentPage(result.context), 1500);
+    // Wait for page to load product listings
+    waitForProductsAndAnalyze(result.context);
   } else {
     console.log('[Sift] No context available - research a product in ChatGPT first');
   }
 
-  // Listen for context updates
+  // Listen for context updates from background
   browser.runtime.onMessage.addListener((message) => {
     console.log('[Sift] Received message:', message.type);
     if (message.type === 'CONTEXT_AVAILABLE') {
-      browser.runtime.sendMessage({ type: 'GET_CONTEXT' }).then((context) => {
-        if (context) {
-          analyzeCurrentPage(context);
-        }
-      });
+      // Context may be passed directly or we fetch it
+      const context = message.context;
+      if (context) {
+        console.log('[Sift] Context received directly:', context.query);
+        waitForProductsAndAnalyze(context);
+      } else {
+        browser.runtime.sendMessage({ type: 'GET_CONTEXT' }).then((ctx) => {
+          if (ctx) {
+            waitForProductsAndAnalyze(ctx);
+          }
+        });
+      }
     }
   });
+}
+
+function waitForProductsAndAnalyze(context: ProductContext) {
+  // Wait for product listings to appear on the page
+  let attempts = 0;
+  const maxAttempts = 10;
+  
+  const checkForProducts = () => {
+    attempts++;
+    const products = scrapeProducts();
+    
+    if (products.length > 0) {
+      console.log('[Sift] Products found, analyzing...');
+      analyzeCurrentPage(context);
+    } else if (attempts < maxAttempts) {
+      console.log(`[Sift] Waiting for products... attempt ${attempts}/${maxAttempts}`);
+      setTimeout(checkForProducts, 800);
+    } else {
+      console.log('[Sift] No products found after waiting');
+      showOverlay({ error: 'No products found. Try searching for a product.', context });
+    }
+  };
+  
+  // Start checking after initial delay
+  setTimeout(checkForProducts, 1000);
 }
 
 async function analyzeCurrentPage(context: ProductContext) {

@@ -154,19 +154,38 @@ async function checkIfShoppingSite(tabId: number, url: string) {
     'bestbuy.com',
     'target.com',
     'walmart.com',
+    'newegg.com',
+    'ebay.com',
   ];
 
   const isShoppingSite = shoppingSites.some(site => url.includes(site));
   
   if (isShoppingSite) {
-    const { exists } = await checkContextExists();
-    if (exists) {
-      // Notify the shopping content script that we have context
-      try {
-        await browser.tabs.sendMessage(tabId, { type: 'CONTEXT_AVAILABLE' });
-      } catch {
-        // Content script might not be ready yet, that's okay
-      }
+    console.log('[Sift] Shopping site detected:', url);
+    const { exists, context } = await checkContextExists();
+    
+    if (exists && context) {
+      console.log('[Sift] Context exists, notifying tab:', context.query);
+      
+      // Try multiple times as content script may not be ready
+      const notifyWithRetry = async (attempts: number) => {
+        for (let i = 0; i < attempts; i++) {
+          try {
+            await browser.tabs.sendMessage(tabId, { 
+              type: 'CONTEXT_AVAILABLE',
+              context 
+            });
+            console.log('[Sift] Successfully notified shopping tab');
+            return;
+          } catch {
+            // Wait and retry
+            await new Promise(r => setTimeout(r, 500));
+          }
+        }
+      };
+      
+      // Start notifying after a delay to let content script load
+      setTimeout(() => notifyWithRetry(5), 1000);
     }
   }
 }
