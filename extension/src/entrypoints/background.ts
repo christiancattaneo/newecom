@@ -10,6 +10,11 @@ interface ProductContext {
   timestamp: number;
   source: 'chatgpt' | 'manual';
   mentionedProducts?: string[];
+  trackedLinks?: Array<{
+    url: string;
+    domain: string;
+    text: string;
+  }>;
   messageCount?: number;
   conversationId?: string;
   recentMessages?: Array<{
@@ -158,43 +163,78 @@ async function rankProducts(products: ProductData[]): Promise<RankingResult | { 
 }
 
 async function checkIfShoppingSite(tabId: number, url: string) {
-  const shoppingSites = [
-    'amazon.com',
-    'bestbuy.com',
-    'target.com',
-    'walmart.com',
-    'newegg.com',
-    'ebay.com',
-  ];
-
-  const isShoppingSite = shoppingSites.some(site => url.includes(site));
+  const { exists, context } = await checkContextExists();
   
-  if (isShoppingSite) {
-    console.log('[Sift] Shopping site detected:', url);
-    const { exists, context } = await checkContextExists();
+  if (!exists || !context) {
+    console.log('[Sift] No context, skipping');
+    return;
+  }
+
+  // Check if this URL matches any tracked link from ChatGPT
+  const matchedLink = context.trackedLinks?.find(link => {
+    try {
+      const trackedUrl = new URL(link.url);
+      const currentUrl = new URL(url);
+      // Match by domain
+      const trackedDomain = trackedUrl.hostname.replace('www.', '');
+      const currentDomain = currentUrl.hostname.replace('www.', '');
+      return currentDomain.includes(trackedDomain) || trackedDomain.includes(currentDomain);
+    } catch {
+      return false;
+    }
+  });
+
+  if (matchedLink) {
+    console.log('[Sift] TRACKED LINK detected:', matchedLink.domain, url);
     
-    if (exists && context) {
-      console.log('[Sift] Context exists, notifying tab:', context.query);
+    // Programmatically inject shopping script for tracked links
+    // This works on ANY site, not just predefined list
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['content-scripts/shopping.js'],
+      });
+      console.log('[Sift] Injected shopping script on tracked link');
+    } catch (e) {
+      console.log('[Sift] Could not inject (might already exist):', e);
+    }
+    
+    // Notify with context
+    setTimeout(async () => {
+      await notifyTabWithContext(tabId, context, true);
+    }, 1500);
+    return;
+  }
+
+  // For non-tracked sites, just try to notify (content script already there from manifest)
+  setTimeout(async () => {
+    await notifyTabWithContext(tabId, context, false);
+  }, 1000);
+}
+
+async function notifyTabWithContext(tabId: number, context: ProductContext, isTrackedLink: boolean) {
+  for (let i = 0; i < 5; i++) {
+    try {
+      await browser.tabs.sendMessage(tabId, { 
+        type: 'CONTEXT_AVAILABLE',
+        context,
+        isTrackedLink,
+      });
+      console.log('[Sift] Notified tab successfully');
       
-      // Try multiple times as content script may not be ready
-      const notifyWithRetry = async (attempts: number) => {
-        for (let i = 0; i < attempts; i++) {
-          try {
-            await browser.tabs.sendMessage(tabId, { 
-              type: 'CONTEXT_AVAILABLE',
-              context 
-            });
-            console.log('[Sift] Successfully notified shopping tab');
-            return;
-          } catch {
-            // Wait and retry
-            await new Promise(r => setTimeout(r, 500));
-          }
+      // Update analysis state for popup
+      await chrome.storage.session.set({ 
+        'sift:analysisState': {
+          tabId,
+          url: (await chrome.tabs.get(tabId)).url,
+          status: 'analyzing',
+          isTrackedLink,
+          timestamp: Date.now(),
         }
-      };
-      
-      // Start notifying after a delay to let content script load
-      setTimeout(() => notifyWithRetry(5), 1000);
+      });
+      return;
+    } catch {
+      await new Promise(r => setTimeout(r, 500));
     }
   }
 }

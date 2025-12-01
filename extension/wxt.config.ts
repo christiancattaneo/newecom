@@ -1,24 +1,24 @@
 import { defineConfig } from 'wxt';
 
 export default defineConfig({
-  // Extension manifest configuration
   manifest: {
     name: 'Sift - Smart Shopping Assistant',
     description: 'AI-powered product recommendations based on your ChatGPT research',
     version: '0.1.0',
-    permissions: ['storage', 'activeTab'],
+    permissions: [
+      'storage',
+      'activeTab',
+      'scripting',  // For programmatic injection on tracked links
+      'webNavigation',
+    ],
     host_permissions: [
+      // ChatGPT
       'https://chatgpt.com/*',
       'https://chat.openai.com/*',
-      'https://www.amazon.com/*',
-      'https://www.bestbuy.com/*',
-      'https://www.target.com/*',
-      'https://www.walmart.com/*',
+      // Allow injection on ANY https site (for tracked links from ChatGPT)
+      'https://*/*',
     ],
   },
-  // Use TypeScript
   srcDir: 'src',
-  // Output directory
   outDir: 'dist',
 });
-

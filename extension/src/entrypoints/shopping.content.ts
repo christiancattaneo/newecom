@@ -5,10 +5,28 @@
 
 export default defineContentScript({
   matches: [
-    'https://www.amazon.com/*',
-    'https://www.bestbuy.com/*',
-    'https://www.target.com/*',
-    'https://www.walmart.com/*',
+    // Common shopping sites (auto-inject)
+    'https://*.amazon.com/*',
+    'https://*.amazon.co.uk/*',
+    'https://*.bestbuy.com/*',
+    'https://*.target.com/*',
+    'https://*.walmart.com/*',
+    'https://*.homedepot.com/*',
+    'https://*.lowes.com/*',
+    'https://*.newegg.com/*',
+    'https://*.ebay.com/*',
+    'https://*.ebay.co.uk/*',
+    'https://*.wayfair.com/*',
+    'https://*.costco.com/*',
+    'https://*.macys.com/*',
+    'https://*.nordstrom.com/*',
+    'https://*.zappos.com/*',
+    'https://*.bhphotovideo.com/*',
+    'https://*.adorama.com/*',
+    'https://*.overstock.com/*',
+    'https://*.chewy.com/*',
+    'https://*.etsy.com/*',
+    // Plus: background will programmatically inject on ANY tracked link from ChatGPT
   ],
   runAt: 'document_idle',
 
@@ -63,7 +81,7 @@ async function initShoppingAssistant() {
   }
 
   // Listen for context updates from background
-  browser.runtime.onMessage.addListener((message) => {
+  browser.runtime.onMessage.addListener((message: { type: string; context?: ProductContext }) => {
     console.log('[Sift] Received message:', message.type);
     if (message.type === 'CONTEXT_AVAILABLE') {
       // Context may be passed directly or we fetch it
@@ -72,7 +90,7 @@ async function initShoppingAssistant() {
         console.log('[Sift] Context received directly:', context.query);
         waitForProductsAndAnalyze(context);
       } else {
-        browser.runtime.sendMessage({ type: 'GET_CONTEXT' }).then((ctx) => {
+        browser.runtime.sendMessage({ type: 'GET_CONTEXT' }).then((ctx: ProductContext) => {
           if (ctx) {
             waitForProductsAndAnalyze(ctx);
           }
@@ -164,7 +182,7 @@ async function analyzeCurrentPage(context: ProductContext) {
 function scrapeProducts(): ProductData[] {
   const hostname = window.location.hostname;
   
-  if (hostname.includes('amazon.com')) {
+  if (hostname.includes('amazon.com') || hostname.includes('amazon.co')) {
     return scrapeAmazon();
   } else if (hostname.includes('bestbuy.com')) {
     return scrapeBestBuy();
@@ -172,9 +190,14 @@ function scrapeProducts(): ProductData[] {
     return scrapeTarget();
   } else if (hostname.includes('walmart.com')) {
     return scrapeWalmart();
+  } else if (hostname.includes('homedepot.com')) {
+    return scrapeHomeDepot();
+  } else if (hostname.includes('lowes.com')) {
+    return scrapeLowes();
+  } else {
+    // Generic scraper for any other site
+    return scrapeGeneric();
   }
-  
-  return [];
 }
 
 function scrapeAmazon(): ProductData[] {
@@ -407,6 +430,241 @@ function scrapeWalmart(): ProductData[] {
   });
 
   return products;
+}
+
+function scrapeHomeDepot(): ProductData[] {
+  const products: ProductData[] = [];
+  console.log('[Sift] Scraping Home Depot...');
+  
+  // Search results
+  const items = document.querySelectorAll('[data-testid="product-pod"], .browse-search__pod, .product-pod');
+  
+  items.forEach((item, index) => {
+    if (index >= 10) return;
+    
+    const titleEl = item.querySelector('[data-testid="product-header"] a, .product-title, a.product-header__title');
+    const priceEl = item.querySelector('[data-testid="price-format"] span, .price-format__main-price, .price__dollars');
+    const ratingEl = item.querySelector('[data-testid="ratings"] span, .ratings__average');
+    const reviewEl = item.querySelector('[data-testid="ratings-count"], .ratings__count');
+    const imageEl = item.querySelector('img[data-testid="product-image"], img.product-image') as HTMLImageElement;
+    
+    if (titleEl) {
+      const priceText = priceEl?.textContent?.replace(/[^0-9.]/g, '') || '';
+      let rating: number | undefined;
+      if (ratingEl?.textContent) {
+        const match = ratingEl.textContent.match(/(\d+\.?\d*)/);
+        if (match) rating = parseFloat(match[1]);
+      }
+      let reviewCount: number | undefined;
+      if (reviewEl?.textContent) {
+        const countText = reviewEl.textContent.replace(/[^0-9]/g, '');
+        if (countText) reviewCount = parseInt(countText);
+      }
+      
+      products.push({
+        title: titleEl.textContent?.trim() || '',
+        price: priceText ? parseFloat(priceText) : null,
+        url: (titleEl as HTMLAnchorElement).href || window.location.href,
+        description: '',
+        imageUrl: imageEl?.src,
+        rating,
+        reviewCount,
+        inStock: true,
+      });
+    }
+  });
+
+  // Single product page
+  if (products.length === 0) {
+    const title = document.querySelector('h1.product-details__title, [data-testid="product-title"]')?.textContent?.trim();
+    if (title) {
+      const priceEl = document.querySelector('[data-testid="price-format"], .price-format__main-price');
+      const priceText = priceEl?.textContent?.replace(/[^0-9.]/g, '') || '';
+      
+      products.push({
+        title,
+        price: priceText ? parseFloat(priceText) : null,
+        url: window.location.href,
+        description: document.querySelector('[data-testid="product-description"]')?.textContent?.trim() || '',
+        imageUrl: (document.querySelector('[data-testid="product-image"] img, .mediagallery__mainimage img') as HTMLImageElement)?.src,
+      });
+    }
+  }
+
+  return products;
+}
+
+function scrapeLowes(): ProductData[] {
+  const products: ProductData[] = [];
+  console.log('[Sift] Scraping Lowes...');
+  
+  const items = document.querySelectorAll('[data-selector="splp-prd-pod"], .product-card');
+  
+  items.forEach((item, index) => {
+    if (index >= 10) return;
+    
+    const titleEl = item.querySelector('a[data-selector="splp-prd-title"], .product-title a');
+    const priceEl = item.querySelector('[data-selector="splp-prd-act-$"], .art-pd-price');
+    
+    if (titleEl) {
+      const priceText = priceEl?.textContent?.replace(/[^0-9.]/g, '') || '';
+      
+      products.push({
+        title: titleEl.textContent?.trim() || '',
+        price: priceText ? parseFloat(priceText) : null,
+        url: (titleEl as HTMLAnchorElement).href,
+        description: '',
+      });
+    }
+  });
+
+  return products;
+}
+
+// Generic scraper for ANY site - looks for common e-commerce patterns
+function scrapeGeneric(): ProductData[] {
+  const products: ProductData[] = [];
+  console.log('[Sift] Using generic scraper for:', window.location.hostname);
+  
+  // Look for common product patterns
+  // Strategy 1: Single product page detection
+  const singleProduct = scrapeSingleProductPage();
+  if (singleProduct) {
+    products.push(singleProduct);
+    return products;
+  }
+  
+  // Strategy 2: Look for product cards/grids
+  const productSelectors = [
+    '[data-product]', '[data-sku]', '[data-item]',
+    '.product-card', '.product-item', '.product-tile',
+    '[class*="product-card"]', '[class*="productCard"]',
+    '[class*="ProductCard"]', '[class*="product-item"]',
+    'article[class*="product"]', 'div[class*="product"]',
+    '.sku-item', '.search-result-item', '.listing-item',
+  ];
+  
+  for (const selector of productSelectors) {
+    const items = document.querySelectorAll(selector);
+    if (items.length >= 2) {
+      console.log('[Sift] Found product pattern:', selector, items.length);
+      items.forEach((item, index) => {
+        if (index >= 10) return;
+        
+        // Try to find title
+        const titleEl = item.querySelector('h2, h3, h4, a[class*="title"], [class*="name"], [class*="Title"]');
+        if (!titleEl) return;
+        
+        // Try to find price
+        let priceText = '';
+        const priceEl = item.querySelector('[class*="price"], [class*="Price"], .price, span[class*="$"]');
+        if (priceEl?.textContent) {
+          const match = priceEl.textContent.match(/\$?([\d,]+\.?\d*)/);
+          if (match) priceText = match[1].replace(',', '');
+        }
+        
+        // Try to find link
+        const linkEl = (item.querySelector('a[href*="/product"], a[href*="/p/"], a[href*="/dp/"]') || 
+                       item.querySelector('a')) as HTMLAnchorElement;
+        
+        // Try to find image
+        const imageEl = item.querySelector('img') as HTMLImageElement;
+        
+        products.push({
+          title: titleEl.textContent?.trim() || '',
+          price: priceText ? parseFloat(priceText) : null,
+          url: linkEl?.href || window.location.href,
+          description: '',
+          imageUrl: imageEl?.src,
+        });
+      });
+      
+      if (products.length > 0) break;
+    }
+  }
+
+  console.log('[Sift] Generic scrape found:', products.length, 'products');
+  return products;
+}
+
+function scrapeSingleProductPage(): ProductData | null {
+  // Common single product page patterns
+  const titleSelectors = [
+    'h1[class*="product"]', 'h1[class*="Product"]',
+    'h1[data-testid*="product"]', 'h1[data-testid*="title"]',
+    '[class*="product-title"]', '[class*="productTitle"]',
+    '[itemprop="name"]', '#productTitle', '.product-name h1',
+  ];
+  
+  let title = '';
+  for (const sel of titleSelectors) {
+    const el = document.querySelector(sel);
+    if (el?.textContent?.trim()) {
+      title = el.textContent.trim();
+      break;
+    }
+  }
+  
+  if (!title) return null;
+  
+  // Find price
+  let price: number | null = null;
+  const priceSelectors = [
+    '[class*="price"]:not([class*="prices"])', '[itemprop="price"]',
+    '[data-testid*="price"]', '.product-price', '#priceblock',
+  ];
+  
+  for (const sel of priceSelectors) {
+    const el = document.querySelector(sel);
+    if (el?.textContent) {
+      const match = el.textContent.match(/\$?([\d,]+\.?\d*)/);
+      if (match) {
+        price = parseFloat(match[1].replace(',', ''));
+        break;
+      }
+    }
+  }
+  
+  // Find image
+  const imageSelectors = [
+    '[class*="product-image"] img', '[class*="productImage"] img',
+    '[data-testid*="product-image"] img', '#product-image img',
+    '[class*="gallery"] img', 'img[itemprop="image"]',
+  ];
+  
+  let imageUrl = '';
+  for (const sel of imageSelectors) {
+    const el = document.querySelector(sel) as HTMLImageElement;
+    if (el?.src) {
+      imageUrl = el.src;
+      break;
+    }
+  }
+  
+  // Find description
+  const descSelectors = [
+    '[class*="description"]', '[itemprop="description"]',
+    '[data-testid*="description"]', '#product-description',
+  ];
+  
+  let description = '';
+  for (const sel of descSelectors) {
+    const el = document.querySelector(sel);
+    if (el?.textContent?.trim()) {
+      description = el.textContent.trim().slice(0, 500);
+      break;
+    }
+  }
+
+  console.log('[Sift] Found single product:', title.slice(0, 50));
+  
+  return {
+    title,
+    price,
+    url: window.location.href,
+    description,
+    imageUrl,
+  };
 }
 
 function showOverlay(options: {

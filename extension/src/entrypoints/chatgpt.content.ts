@@ -25,6 +25,11 @@ interface ConversationContext {
   extractedQuery: string;
   extractedRequirements: string[];
   mentionedProducts: string[];
+  trackedLinks: Array<{
+    url: string;
+    domain: string;
+    text: string;
+  }>;
   lastUpdated: number;
 }
 
@@ -40,6 +45,7 @@ function createEmptyContext(): ConversationContext {
     extractedQuery: '',
     extractedRequirements: [],
     mentionedProducts: [],
+    trackedLinks: [],
     lastUpdated: Date.now(),
   };
 }
@@ -362,7 +368,49 @@ function extractContextFromMessages() {
   }
   context.mentionedProducts = [...products].slice(0, 10);
 
+  // Extract links from AI responses (shopping links ChatGPT provides)
+  extractTrackedLinks();
+
   context.lastUpdated = Date.now();
+}
+
+function extractTrackedLinks() {
+  const links: ConversationContext['trackedLinks'] = [];
+  
+  // Find all links in AI responses - ChatGPT uses citation pills
+  const linkElements = document.querySelectorAll(
+    '[data-message-author-role="assistant"] a[href*="amazon.com"], ' +
+    '[data-message-author-role="assistant"] a[href*="homedepot.com"], ' +
+    '[data-message-author-role="assistant"] a[href*="bestbuy.com"], ' +
+    '[data-message-author-role="assistant"] a[href*="walmart.com"], ' +
+    '[data-message-author-role="assistant"] a[href*="target.com"], ' +
+    '[data-message-author-role="assistant"] a[href*="ebay.com"], ' +
+    '[data-message-author-role="assistant"] a[href*="newegg.com"], ' +
+    '[data-message-author-role="assistant"] a[href*="supplyhouse.com"], ' +
+    '[data-message-author-role="assistant"] [data-testid="webpage-citation-pill"] a'
+  );
+
+  linkElements.forEach(el => {
+    const href = (el as HTMLAnchorElement).href;
+    if (!href) return;
+    
+    try {
+      const url = new URL(href);
+      const domain = url.hostname.replace('www.', '');
+      const text = el.textContent?.trim() || domain;
+      
+      // Avoid duplicates
+      if (!links.find(l => l.url === href)) {
+        links.push({ url: href, domain, text });
+      }
+    } catch {}
+  });
+
+  context.trackedLinks = links.slice(0, 20);
+  
+  if (links.length > 0) {
+    console.log('[Sift] Tracked links from ChatGPT:', links.length);
+  }
 }
 
 async function saveContext() {
@@ -379,6 +427,7 @@ async function saveContext() {
         query: context.extractedQuery,
         requirements: context.extractedRequirements,
         mentionedProducts: context.mentionedProducts,
+        trackedLinks: context.trackedLinks,
         messageCount: context.messages.length,
         conversationId: context.conversationId,
         // Include recent messages for richer context
@@ -422,22 +471,29 @@ function showCaptureIndicator(type: 'prompt' | 'response') {
   
   const msgCount = context.messages.length;
   const reqCount = context.extractedRequirements.length;
+  const linkCount = context.trackedLinks.length;
   
   indicator.innerHTML = `
-    <div style="position:fixed;bottom:20px;right:20px;background:linear-gradient(135deg,#10b981,#059669);color:white;padding:14px 18px;border-radius:12px;font-family:system-ui;font-size:13px;box-shadow:0 4px 20px rgba(16,185,129,0.4);z-index:10000;max-width:320px">
+    <div style="position:fixed;bottom:20px;right:20px;background:linear-gradient(135deg,#10b981,#059669);color:white;padding:14px 18px;border-radius:12px;font-family:system-ui;font-size:13px;box-shadow:0 4px 20px rgba(16,185,129,0.4);z-index:10000;max-width:340px">
       <div style="font-weight:600;margin-bottom:6px">✓ Sift tracking conversation</div>
       <div style="font-size:12px;background:rgba(0,0,0,0.15);padding:8px 10px;border-radius:6px;margin-bottom:6px">
         "${context.extractedQuery.slice(0, 60)}${context.extractedQuery.length > 60 ? '...' : ''}"
       </div>
-      <div style="font-size:11px;opacity:0.9;display:flex;gap:12px">
+      <div style="font-size:11px;opacity:0.9;display:flex;flex-wrap:wrap;gap:8px">
         <span>📝 ${msgCount} messages</span>
         <span>🎯 ${reqCount} requirements</span>
+        ${linkCount > 0 ? `<span>🔗 ${linkCount} links tracked</span>` : ''}
       </div>
       ${context.extractedRequirements.length > 0 ? `
         <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px">
           ${context.extractedRequirements.slice(0, 4).map(r => 
             `<span style="font-size:10px;background:rgba(255,255,255,0.2);padding:2px 6px;border-radius:4px">${r}</span>`
           ).join('')}
+        </div>
+      ` : ''}
+      ${linkCount > 0 ? `
+        <div style="margin-top:6px;font-size:10px;opacity:0.8">
+          Click any ChatGPT link → Sift will analyze
         </div>
       ` : ''}
     </div>`;

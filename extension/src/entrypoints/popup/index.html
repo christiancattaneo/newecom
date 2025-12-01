@@ -25,7 +25,23 @@
         <h2>Your Search</h2>
         <div id="context-display">
           <p id="context-query"></p>
-          <ul id="context-requirements"></ul>
+          
+          <div id="context-stats" class="stats"></div>
+          
+          <div id="requirements-section">
+            <h3>Requirements</h3>
+            <ul id="context-requirements"></ul>
+          </div>
+          
+          <div id="links-section" class="hidden">
+            <h3>Tracked Links</h3>
+            <ul id="context-links"></ul>
+          </div>
+          
+          <div id="products-section" class="hidden">
+            <h3>Mentioned Products</h3>
+            <ul id="context-products"></ul>
+          </div>
         </div>
         <button id="clear-context" class="btn-secondary">Clear Context</button>
       </section>
@@ -47,4 +63,3 @@
   <script type="module" src="./main.ts"></script>
 </body>
 </html>
-
