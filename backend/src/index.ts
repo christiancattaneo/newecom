@@ -19,6 +19,10 @@ interface ProductData {
   price: number | null;
   url: string;
   description: string;
+  rating?: number;
+  reviewCount?: number;
+  inStock?: boolean;
+  features?: string[];
 }
 
 interface RankProductsRequest {
@@ -217,53 +221,56 @@ function buildPrompt(context: ProductContext, products: ProductData[]): string {
   const productList = products
     .map((p, i) => {
       const priceStr = p.price ? `$${p.price.toFixed(2)}` : 'Price unknown';
-      return `[${i}] ${p.title}\n    Price: ${priceStr}\n    ${p.description ? `Details: ${p.description.slice(0, 300)}` : ''}`;
+      const ratingStr = p.rating ? `${p.rating}★ (${p.reviewCount?.toLocaleString() || '?'} reviews)` : 'No rating';
+      const featuresStr = p.features?.length ? `Features: ${p.features.slice(0, 4).join('; ')}` : '';
+      
+      return `[${i}] ${p.title}
+    Price: ${priceStr}
+    Rating: ${ratingStr}
+    ${p.description ? `Info: ${p.description.slice(0, 200)}` : ''}
+    ${featuresStr}`;
     })
     .join('\n\n');
 
-  return `
-You are an expert product analyst helping a user find the perfect product based on their research.
+  return `You are a sharp product analyst. User researched a product and now is shopping. Help them decide.
 
-## User's Search
-Product type: "${context.query}"
+## What they want:
+"${context.query}"
 
-## User's Requirements (from their research):
-${context.requirements.map(r => `• ${r}`).join('\n')}
+## Their requirements:
+${context.requirements.length > 0 ? context.requirements.map(r => `• ${r}`).join('\n') : '• (No specific requirements stated)'}
 
-## Products on Current Page:
+## Products available:
 ${productList}
 
-## Your Task
-Analyze each product against the user's specific requirements. Be insightful and specific.
+## Analyze each product:
+1. Does it match their requirements? Check EACH requirement.
+2. Is the rating good? (4.0+ is solid, 4.5+ is great)
+3. Enough reviews to trust? (100+ is decent, 1000+ is reliable)
+4. Price reasonable for what they get?
 
-For each product, provide:
-1. **Match Score (0-100)**: How well it meets their exact requirements
-2. **Key Reasons (2-3)**: Specific, actionable insights like:
-   - "✓ $89 is well under your $100 budget"
-   - "✓ Known for exceptional arch support - ideal for wide feet"
-   - "⚠ Synthetic upper may not be as breathable"
-   - "✗ No cushioning technology mentioned"
-
-Be specific about WHY each product does or doesn't fit. Reference actual product features.
-
-## Response Format (JSON only):
+## Response (JSON only):
 {
   "rankings": [
     { 
       "index": 0, 
-      "score": 92, 
-      "reasons": ["At $79, leaves room in your $100 budget for accessories", "EVA foam midsole provides the cushioning you need", "Wide fit option available"] 
+      "score": 85, 
+      "reasons": [
+        "✓ 4.6★ with 2,400 reviews - highly trusted",
+        "✓ Specifically mentions fluoride removal",
+        "⚠ At $45, slightly above budget but justified"
+      ] 
     }
   ],
-  "summary": "One sentence recommendation highlighting the top pick and why"
+  "summary": "Quick 1-sentence verdict on best pick"
 }
 
 Rules:
-- Only include products scoring 40+
-- Sort by score descending
-- Maximum 5 products
-- Be specific, not generic
-`;
+- Score 0-100 based on requirement match + reviews + value
+- Only products scoring 50+ 
+- Max 5 products
+- Be specific: cite actual features, prices, ratings
+- Reasons should directly reference their requirements`;
 }
 
 function parseAIResponse(content: string): RankProductsResponse {
