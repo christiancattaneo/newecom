@@ -32,8 +32,8 @@ interface RankingResult {
 const CONTEXT_KEY = 'sift:context';
 const API_URL_KEY = 'sift:apiUrl';
 
-// Default API URL (will be overridden by env)
-const DEFAULT_API_URL = 'http://localhost:8787';
+// Production API URL
+const DEFAULT_API_URL = 'https://sift-api.christiandcattaneo.workers.dev';
 
 export default defineBackground(() => {
   console.log('[Sift] Background service worker started');
