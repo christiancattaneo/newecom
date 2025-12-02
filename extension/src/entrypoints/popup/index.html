@@ -17,6 +17,7 @@
     <nav class="tabs">
       <button class="tab active" data-tab="current">Current</button>
       <button class="tab" data-tab="history">History <span id="history-count" class="badge">0</span></button>
+      <button class="tab" data-tab="shop">Shop</button>
     </nav>
 
     <main>
@@ -75,6 +76,49 @@
           </div>
         </section>
         <button id="clear-history" class="btn-danger hidden">Clear All History</button>
+      </div>
+
+      <!-- SHOP TAB -->
+      <div id="tab-shop" class="tab-content">
+        <section id="shop-context">
+          <div id="shop-context-label" class="shop-label">
+            <span class="label-text">Shopping for:</span>
+            <span id="shop-product-name" class="product-name">-</span>
+          </div>
+        </section>
+
+        <section id="shop-store-section">
+          <label for="store-select">Select store:</label>
+          <select id="store-select">
+            <option value="">Choose a store...</option>
+            <option value="amazon">Amazon</option>
+            <option value="bestbuy">Best Buy</option>
+            <option value="target">Target</option>
+            <option value="walmart">Walmart</option>
+            <option value="homedepot">Home Depot</option>
+            <option value="lowes">Lowes</option>
+            <option value="newegg">Newegg</option>
+            <option value="costco">Costco</option>
+          </select>
+          <button id="shop-search" class="btn-primary" disabled>Search & Analyze</button>
+        </section>
+
+        <section id="shop-results" class="hidden">
+          <div id="shop-loading" class="loading hidden">
+            <div class="spinner"></div>
+            <p>Finding best products...</p>
+          </div>
+          <div id="shop-products" class="shop-products">
+            <!-- Product cards will be inserted here -->
+          </div>
+          <div id="shop-summary" class="shop-summary hidden"></div>
+        </section>
+
+        <section id="no-shop-context" class="empty-state">
+          <div class="icon">🛒</div>
+          <p>No product selected</p>
+          <p class="hint">Use Current context or select from History</p>
+        </section>
       </div>
     </main>
 

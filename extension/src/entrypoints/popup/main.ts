@@ -46,8 +46,24 @@ const noHistory = document.getElementById('no-history')!;
 const historyCount = document.getElementById('history-count')!;
 const clearHistoryBtn = document.getElementById('clear-history')!;
 
+// Shop elements
+const shopContext = document.getElementById('shop-context')!;
+const shopProductName = document.getElementById('shop-product-name')!;
+const shopStoreSection = document.getElementById('shop-store-section')!;
+const storeSelect = document.getElementById('store-select') as HTMLSelectElement;
+const shopSearchBtn = document.getElementById('shop-search')!;
+const shopResults = document.getElementById('shop-results')!;
+const shopLoading = document.getElementById('shop-loading')!;
+const shopProducts = document.getElementById('shop-products')!;
+const shopSummary = document.getElementById('shop-summary')!;
+const noShopContext = document.getElementById('no-shop-context')!;
+
 // Track known history IDs for highlighting new entries
 let knownHistoryIds: Set<string> = new Set();
+
+// Current shop context
+let currentShopContext: ProductContext | null = null;
+let currentShopProductName: string = '';
 
 // Tab elements
 const tabs = document.querySelectorAll('.tab');
@@ -102,6 +118,11 @@ function setupTabs() {
       // Refresh history when switching to history tab
       if (tabName === 'history') {
         loadHistory();
+      }
+      
+      // Load shop context when switching to shop tab
+      if (tabName === 'shop') {
+        loadShopContext();
       }
     });
   });
@@ -181,7 +202,8 @@ function renderHistory(history: ResearchEntry[]) {
         <div class="history-categories">${categories}</div>
         <div class="history-requirements">${requirements || '<span class="no-reqs">No requirements</span>'}</div>
         <div class="history-actions">
-          <button class="btn-use" data-id="${entry.id}">Use This</button>
+          <button class="btn-use" data-id="${entry.id}">Set Current</button>
+          <button class="btn-shop" data-id="${entry.id}">🛒 Shop</button>
           <button class="btn-delete" data-id="${entry.id}">×</button>
         </div>
       </div>
@@ -209,12 +231,33 @@ function renderHistory(history: ResearchEntry[]) {
     });
   });
   
+  historyList.querySelectorAll('.btn-shop').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const id = (e.target as HTMLElement).getAttribute('data-id');
+      await shopHistoryEntry(id!);
+    });
+  });
+  
   historyList.querySelectorAll('.btn-delete').forEach(btn => {
     btn.addEventListener('click', async (e) => {
       const id = (e.target as HTMLElement).getAttribute('data-id');
       await deleteHistoryEntry(id!);
     });
   });
+}
+
+async function shopHistoryEntry(id: string) {
+  try {
+    const result = await browser.runtime.sendMessage({ type: 'GET_RESEARCH_HISTORY' });
+    const history: ResearchEntry[] = result || [];
+    const entry = history.find(h => h.id === id);
+    
+    if (entry) {
+      setShopContextFromHistory(entry);
+    }
+  } catch (error) {
+    console.error('[Sift Popup] Failed to shop history entry:', error);
+  }
 }
 
 async function useHistoryEntry(id: string) {
@@ -354,4 +397,237 @@ function setupEventListeners() {
       }
     }
   });
+  
+  // Shop tab listeners
+  storeSelect.addEventListener('change', () => {
+    shopSearchBtn.disabled = !storeSelect.value || !currentShopContext;
+  });
+  
+  shopSearchBtn.addEventListener('click', async () => {
+    if (!currentShopContext || !storeSelect.value) return;
+    await searchAndAnalyze(storeSelect.value);
+  });
+}
+
+// ========================================
+// SHOP TAB FUNCTIONS
+// ========================================
+
+async function loadShopContext() {
+  try {
+    const result = await browser.runtime.sendMessage({ type: 'CHECK_CONTEXT_EXISTS' });
+    
+    if (result?.exists && result.context) {
+      setShopContext(result.context, extractProductName(result.context.query));
+    } else {
+      showNoShopContext();
+    }
+  } catch (error) {
+    console.error('[Sift Popup] Failed to load shop context:', error);
+    showNoShopContext();
+  }
+}
+
+function extractProductName(query: string): string {
+  let cleaned = query
+    .replace(/^(what|which|can you|please|i need|i want|looking for|find me|recommend|best|top|good)\s+/gi, '')
+    .replace(/\?+$/, '')
+    .replace(/\s+(for\s+(men|women|kids|home|office|outdoor|indoor))\b.*/gi, '')
+    .replace(/\s+(under|less than|around|about)\s*\$?\d+.*/gi, '')
+    .replace(/\s+(with|without|no|that has|that have)\s+.*/gi, '')
+    .replace(/\s*,\s*.*$/, '')
+    .trim();
+  
+  cleaned = cleaned
+    .toLowerCase()
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+  
+  if (cleaned.length > 40) {
+    cleaned = cleaned.slice(0, 40).trim();
+    const lastSpace = cleaned.lastIndexOf(' ');
+    if (lastSpace > 20) cleaned = cleaned.slice(0, lastSpace);
+  }
+  
+  return cleaned || 'Product Research';
+}
+
+function setShopContext(context: ProductContext, productName: string) {
+  currentShopContext = context;
+  currentShopProductName = productName;
+  
+  shopProductName.textContent = productName;
+  shopContext.classList.remove('hidden');
+  shopStoreSection.classList.remove('hidden');
+  noShopContext.classList.add('hidden');
+  
+  shopSearchBtn.disabled = !storeSelect.value;
+  
+  // Clear previous results
+  shopResults.classList.add('hidden');
+  shopProducts.innerHTML = '';
+  shopSummary.classList.add('hidden');
+}
+
+function showNoShopContext() {
+  currentShopContext = null;
+  shopContext.classList.add('hidden');
+  shopStoreSection.classList.add('hidden');
+  noShopContext.classList.remove('hidden');
+  shopResults.classList.add('hidden');
+}
+
+// Set shop context from history entry
+export function setShopContextFromHistory(entry: ResearchEntry) {
+  const context: ProductContext = {
+    query: entry.query,
+    requirements: entry.requirements,
+    timestamp: entry.timestamp,
+    source: 'chatgpt',
+    conversationId: entry.conversationId,
+  };
+  
+  setShopContext(context, entry.productName || extractProductName(entry.query));
+  
+  // Switch to shop tab
+  tabs.forEach(t => t.classList.remove('active'));
+  document.querySelector('[data-tab="shop"]')?.classList.add('active');
+  tabContents.forEach(c => c.classList.remove('active'));
+  document.getElementById('tab-shop')?.classList.add('active');
+}
+
+const STORE_URLS: Record<string, string> = {
+  amazon: 'https://www.amazon.com/s?k=',
+  bestbuy: 'https://www.bestbuy.com/site/searchpage.jsp?st=',
+  target: 'https://www.target.com/s?searchTerm=',
+  walmart: 'https://www.walmart.com/search?q=',
+  homedepot: 'https://www.homedepot.com/s/',
+  lowes: 'https://www.lowes.com/search?searchTerm=',
+  newegg: 'https://www.newegg.com/p/pl?d=',
+  costco: 'https://www.costco.com/CatalogSearch?dept=All&keyword=',
+};
+
+async function searchAndAnalyze(store: string) {
+  if (!currentShopContext) return;
+  
+  shopResults.classList.remove('hidden');
+  shopLoading.classList.remove('hidden');
+  shopProducts.innerHTML = '';
+  shopSummary.classList.add('hidden');
+  
+  try {
+    const searchUrl = STORE_URLS[store] + encodeURIComponent(currentShopContext.query);
+    
+    // Open in new tab and inject scraper
+    const tab = await chrome.tabs.create({ url: searchUrl, active: false });
+    
+    // Wait for page load
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    // Try to get products from the tab
+    let products: any[] = [];
+    
+    try {
+      // Inject content script to scrape
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id! },
+        files: ['content-scripts/shopping.js'],
+      });
+      
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      // Request products from tab
+      const result = await chrome.tabs.sendMessage(tab.id!, { type: 'SCRAPE_PRODUCTS' });
+      products = result?.products || [];
+    } catch (e) {
+      console.error('[Sift Popup] Failed to scrape:', e);
+    }
+    
+    // Close the background tab
+    await chrome.tabs.remove(tab.id!);
+    
+    if (products.length === 0) {
+      shopLoading.classList.add('hidden');
+      shopProducts.innerHTML = `
+        <div class="empty-state" style="padding: 20px;">
+          <div class="icon">🔍</div>
+          <p>No products found</p>
+          <p class="hint">Try a different store or search term</p>
+          <a href="${searchUrl}" target="_blank" class="shop-product-link" style="margin-top: 12px;">Open ${store} search →</a>
+        </div>
+      `;
+      return;
+    }
+    
+    // Get AI rankings
+    const rankings = await browser.runtime.sendMessage({
+      type: 'RANK_PRODUCTS',
+      products,
+    });
+    
+    shopLoading.classList.add('hidden');
+    
+    if (rankings?.error) {
+      shopProducts.innerHTML = `<div class="empty-state"><p>${rankings.error}</p></div>`;
+      return;
+    }
+    
+    renderShopProducts(products, rankings);
+    
+  } catch (error) {
+    console.error('[Sift Popup] Search failed:', error);
+    shopLoading.classList.add('hidden');
+    shopProducts.innerHTML = `
+      <div class="empty-state">
+        <div class="icon">⚠️</div>
+        <p>Search failed</p>
+        <p class="hint">Please try again</p>
+      </div>
+    `;
+  }
+}
+
+interface ProductData {
+  title: string;
+  price: number | null;
+  url: string;
+  description?: string;
+  imageUrl?: string;
+}
+
+interface RankingResult {
+  rankings: Array<{ index: number; score: number; reasons: string[] }>;
+  summary: string;
+}
+
+function renderShopProducts(products: ProductData[], rankings: RankingResult) {
+  const sortedProducts = rankings.rankings
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5)
+    .map(r => ({
+      ...products[r.index],
+      score: r.score,
+      reasons: r.reasons,
+    }));
+  
+  shopProducts.innerHTML = sortedProducts.map((product, idx) => `
+    <div class="shop-product-card${idx === 0 ? ' top-pick' : ''}">
+      <div class="shop-product-header">
+        <span class="shop-product-rank">${idx === 0 ? '🏆 Best Match' : `#${idx + 1}`}</span>
+        <span class="shop-product-score">${product.score}/100</span>
+      </div>
+      <div class="shop-product-title">${product.title?.slice(0, 80) || 'Unknown Product'}${product.title?.length > 80 ? '...' : ''}</div>
+      ${product.price ? `<div class="shop-product-price">$${product.price.toFixed(2)}</div>` : ''}
+      <div class="shop-product-reasons">
+        ${product.reasons?.slice(0, 3).map(r => `<div class="shop-product-reason">${r}</div>`).join('') || ''}
+      </div>
+      <a href="${product.url}" target="_blank" class="shop-product-link">View Product →</a>
+    </div>
+  `).join('');
+  
+  if (rankings.summary) {
+    shopSummary.innerHTML = `<p>${rankings.summary}</p>`;
+    shopSummary.classList.remove('hidden');
+  }
 }

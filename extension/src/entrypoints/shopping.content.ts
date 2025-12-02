@@ -87,8 +87,16 @@ async function initShoppingAssistant() {
     isTrackedLink?: boolean;
     matchScore?: number;
     isHistoricalMatch?: boolean;
-  }) => {
+  }, _sender, sendResponse) => {
     console.log('[Sift] Received message:', message.type);
+    
+    // Handle scrape request from popup
+    if (message.type === 'SCRAPE_PRODUCTS') {
+      const products = scrapeProducts();
+      sendResponse({ products });
+      return true;
+    }
+    
     if (message.type === 'CONTEXT_AVAILABLE') {
       const context = message.context;
       if (context) {
