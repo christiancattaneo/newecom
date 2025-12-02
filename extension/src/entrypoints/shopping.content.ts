@@ -125,7 +125,17 @@ interface MatchInfo {
 }
 
 function waitForProductsAndAnalyze(context: ProductContext, matchInfo?: MatchInfo) {
-  // Wait for product listings to appear on the page
+  // First check: is this a single product page?
+  const singleProduct = scrapeSingleProductPage();
+  
+  if (singleProduct) {
+    // This is a single product page - show quick view, not full analysis
+    console.log('[Sift] Single product page detected:', singleProduct.title.slice(0, 40));
+    showSingleProductView(singleProduct, context, matchInfo);
+    return;
+  }
+  
+  // Multi-product page: wait for listings to load
   let attempts = 0;
   const maxAttempts = 10;
   
@@ -133,20 +143,214 @@ function waitForProductsAndAnalyze(context: ProductContext, matchInfo?: MatchInf
     attempts++;
     const products = scrapeProducts();
     
-    if (products.length > 0) {
-      console.log('[Sift] Products found, analyzing...');
+    if (products.length > 1) {
+      console.log('[Sift] Multiple products found, analyzing...');
       analyzeCurrentPage(context, matchInfo);
+    } else if (products.length === 1) {
+      // Only one product found - treat as single product page
+      console.log('[Sift] Only one product found, showing quick view');
+      showSingleProductView(products[0], context, matchInfo);
     } else if (attempts < maxAttempts) {
       console.log(`[Sift] Waiting for products... attempt ${attempts}/${maxAttempts}`);
       setTimeout(checkForProducts, 800);
     } else {
-      console.log('[Sift] No products found after waiting');
-      showOverlay({ error: 'No products found. Try searching for a product.', context, matchInfo });
+      // Check one more time for single product
+      const lastCheck = scrapeSingleProductPage();
+      if (lastCheck) {
+        showSingleProductView(lastCheck, context, matchInfo);
+      } else {
+        console.log('[Sift] No products found after waiting');
+        showOverlay({ error: 'No products found. Try searching for a product.', context, matchInfo });
+      }
     }
   };
   
   // Start checking after initial delay
-  setTimeout(checkForProducts, 1000);
+  setTimeout(checkForProducts, 800);
+}
+
+// Show a simple view for single product pages (not the full analysis)
+function showSingleProductView(product: ProductData, context: ProductContext, matchInfo?: MatchInfo) {
+  hideOverlay();
+  
+  overlayElement = document.createElement('div');
+  overlayElement.id = 'sift-overlay';
+  
+  // Quick relevance check based on keywords
+  const productText = `${product.title} ${product.description}`.toLowerCase();
+  const contextText = `${context.query} ${context.requirements.join(' ')}`.toLowerCase();
+  const contextWords = contextText.split(/\s+/).filter(w => w.length > 3);
+  const matchedWords = contextWords.filter(w => productText.includes(w));
+  const relevance = contextWords.length > 0 ? Math.round((matchedWords.length / contextWords.length) * 100) : 50;
+  
+  const relevanceColor = relevance >= 70 ? '#10b981' : relevance >= 40 ? '#fbbf24' : '#f87171';
+  const relevanceText = relevance >= 70 ? 'Good match' : relevance >= 40 ? 'Partial match' : 'May not match';
+  
+  const reqTags = context.requirements.slice(0, 3).map(r => 
+    `<span class="sift-req-tag">${r}</span>`
+  ).join('');
+
+  overlayElement.innerHTML = `
+    <style>
+      #sift-overlay {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 320px;
+        background: #1a1a2e;
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        z-index: 2147483647;
+        overflow: hidden;
+        animation: sift-slide-up 0.3s ease-out;
+        color: #e0e0e0;
+      }
+      @keyframes sift-slide-up {
+        from { transform: translateY(20px); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+      }
+      .sift-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 14px;
+        background: linear-gradient(135deg, #16213e 0%, #1a1a2e 100%);
+        border-bottom: 1px solid #2a2a4a;
+      }
+      .sift-logo { font-weight: 600; font-size: 15px; color: #fff; }
+      .sift-badge {
+        font-size: 10px;
+        color: #10b981;
+        background: #0f3d0f;
+        padding: 2px 8px;
+        border-radius: 10px;
+        margin-left: 8px;
+      }
+      .sift-close {
+        background: none;
+        border: none;
+        font-size: 18px;
+        cursor: pointer;
+        color: #888;
+        padding: 0 4px;
+      }
+      .sift-close:hover { color: #fff; }
+      .sift-single-body {
+        padding: 14px;
+      }
+      .sift-viewing-label {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: #666;
+        margin-bottom: 6px;
+      }
+      .sift-product-name {
+        font-size: 14px;
+        font-weight: 600;
+        color: #fff;
+        margin-bottom: 8px;
+        line-height: 1.3;
+      }
+      .sift-product-price {
+        font-size: 18px;
+        font-weight: 700;
+        color: #10b981;
+        margin-bottom: 10px;
+      }
+      .sift-relevance {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 10px;
+        padding: 8px 10px;
+        background: #16213e;
+        border-radius: 6px;
+      }
+      .sift-relevance-score {
+        font-size: 12px;
+        font-weight: 600;
+        color: ${relevanceColor};
+      }
+      .sift-relevance-text {
+        font-size: 11px;
+        color: #888;
+      }
+      .sift-context-info {
+        font-size: 11px;
+        color: #888;
+        margin-bottom: 8px;
+      }
+      .sift-context-query {
+        color: #10b981;
+        font-weight: 500;
+      }
+      .sift-req-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-top: 6px;
+      }
+      .sift-req-tag {
+        font-size: 9px;
+        background: #2a2a4a;
+        color: #888;
+        padding: 2px 6px;
+        border-radius: 8px;
+      }
+      .sift-footer {
+        padding: 10px 14px;
+        border-top: 1px solid #2a2a4a;
+        display: flex;
+        justify-content: flex-end;
+      }
+      .sift-dismiss {
+        background: #2a2a4a;
+        border: none;
+        color: #888;
+        padding: 5px 12px;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 11px;
+        transition: all 0.2s;
+      }
+      .sift-dismiss:hover {
+        background: #10b981;
+        color: #fff;
+      }
+    </style>
+    <div class="sift-header">
+      <span><span class="sift-logo">🎯 Sift</span><span class="sift-badge">Viewing</span></span>
+      <button class="sift-close" onclick="document.getElementById('sift-overlay').remove()">×</button>
+    </div>
+    <div class="sift-single-body">
+      <div class="sift-viewing-label">You're viewing</div>
+      <div class="sift-product-name">${product.title.slice(0, 80)}${product.title.length > 80 ? '...' : ''}</div>
+      ${product.price ? `<div class="sift-product-price">$${product.price.toLocaleString()}</div>` : ''}
+      <div class="sift-relevance">
+        <span class="sift-relevance-score">${relevance}% ${relevanceText}</span>
+        <span class="sift-relevance-text">to your research</span>
+      </div>
+      <div class="sift-context-info">
+        Researching: <span class="sift-context-query">"${context.query}"</span>
+        ${reqTags ? `<div class="sift-req-tags">${reqTags}</div>` : ''}
+      </div>
+    </div>
+    <div class="sift-footer">
+      <button class="sift-dismiss" onclick="document.getElementById('sift-overlay').remove()">Got it</button>
+    </div>
+  `;
+
+  document.body.appendChild(overlayElement);
+
+  // Auto-dismiss after 8 seconds
+  setTimeout(() => {
+    if (overlayElement) {
+      overlayElement.style.animation = 'sift-fade-out 0.3s ease-out forwards';
+      setTimeout(() => hideOverlay(), 300);
+    }
+  }, 8000);
 }
 
 async function analyzeCurrentPage(context: ProductContext, matchInfo?: MatchInfo) {
