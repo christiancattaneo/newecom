@@ -296,11 +296,15 @@ function extractKeywords(context: ProductContext): string[] {
 function extractProductName(query: string): string {
   // Remove common prefixes/suffixes and clean up the product name
   let cleaned = query
+    // Remove action phrases at the start
+    .replace(/^(list|rank|compare|show|give|tell|find|search|get|help|me|and)\s+/gi, '')
+    .replace(/^(list|rank|compare|show|give|tell|find|search|get|help|me|and)\s+/gi, '') // Run twice for "list and rank"
     // Remove question words and common phrases
-    .replace(/^(what|which|can you|please|i need|i want|looking for|find me|recommend|best|top|good)\s+/gi, '')
+    .replace(/^(what|which|can you|please|i need|i want|looking for|find me|recommend|best|top|good|the)\s+/gi, '')
+    .replace(/^(what|which|can you|please|i need|i want|looking for|find me|recommend|best|top|good|the)\s+/gi, '') // Run twice
     .replace(/\?+$/, '')
     // Remove requirement suffixes (for men, under $100, with X, etc.)
-    .replace(/\s+(for\s+(men|women|kids|home|office|outdoor|indoor))\b.*/gi, '')
+    .replace(/\s+(for\s+(men|women|kids|home|office|outdoor|indoor|me|us))\b.*/gi, '')
     .replace(/\s+(under|less than|around|about)\s*\$?\d+.*/gi, '')
     .replace(/\s+(with|without|no|that has|that have)\s+.*/gi, '')
     .replace(/\s*,\s*.*$/, '') // Remove everything after first comma

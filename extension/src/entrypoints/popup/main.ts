@@ -415,9 +415,14 @@ async function loadShopContext() {
 
 function extractProductName(query: string): string {
   let cleaned = query
-    .replace(/^(what|which|can you|please|i need|i want|looking for|find me|recommend|best|top|good)\s+/gi, '')
+    // Remove action phrases at the start
+    .replace(/^(list|rank|compare|show|give|tell|find|search|get|help|me|and)\s+/gi, '')
+    .replace(/^(list|rank|compare|show|give|tell|find|search|get|help|me|and)\s+/gi, '')
+    // Remove question words and common phrases
+    .replace(/^(what|which|can you|please|i need|i want|looking for|find me|recommend|best|top|good|the)\s+/gi, '')
+    .replace(/^(what|which|can you|please|i need|i want|looking for|find me|recommend|best|top|good|the)\s+/gi, '')
     .replace(/\?+$/, '')
-    .replace(/\s+(for\s+(men|women|kids|home|office|outdoor|indoor))\b.*/gi, '')
+    .replace(/\s+(for\s+(men|women|kids|home|office|outdoor|indoor|me|us))\b.*/gi, '')
     .replace(/\s+(under|less than|around|about)\s*\$?\d+.*/gi, '')
     .replace(/\s+(with|without|no|that has|that have)\s+.*/gi, '')
     .replace(/\s*,\s*.*$/, '')
