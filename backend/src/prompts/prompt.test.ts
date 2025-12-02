@@ -251,9 +251,9 @@ describe('Expected AI Behavior (simulated)', () => {
     
     // Prompt contains healthline (blog) URL
     expect(prompt).toContain('healthline');
-    // Decision tree mentions blog → shopping=false
-    expect(prompt).toContain('blog');
-    expect(prompt).toContain('shopping=false');
+    // Prompt explicitly mentions healthline as NOT shopping
+    expect(prompt).toContain('NOT SHOPPING');
+    expect(prompt).toContain('Healthline');
   });
 
   it('ranking prompt penalizes avoided materials', () => {

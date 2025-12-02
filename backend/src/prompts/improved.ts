@@ -22,32 +22,32 @@ import { SiteAnalysisInput, ProductRankingInput, countTokens } from './current';
  */
 export function buildImprovedSiteAnalysisPrompt(input: SiteAnalysisInput): string {
   const researchList = input.researchHistory
-    .slice(0, 8) // Reduced from 10
+    .slice(0, 8)
     .map((r) => `• [${r.id}] ${r.productName || r.query}`)
     .join('\n');
 
-  return `Analyze if website matches user's product research.
+  return `Analyze if this website is an e-commerce site where users can BUY products.
 
 URL: ${input.url}
 Title: ${input.title}
-${input.description ? `Desc: ${input.description.slice(0, 150)}` : ''}
+${input.description ? `Description: ${input.description.slice(0, 150)}` : ''}
 
-User researched:
+User's product research:
 ${researchList}
 
-Decision tree:
-1. Has buy/cart/checkout OR product listings? → shopping=true
-2. Only blog/news/info content? → shopping=false  
-3. If shopping, category matches any research? → score 60-95
-4. Generic homepage (no specific products)? → score 30-50
+STEP 1 - Is this a SHOPPING site? Check for:
+✓ SHOPPING indicators: "add to cart", "buy now", product listings with prices, checkout, shopping cart
+✗ NOT SHOPPING: blog, news, Wikipedia, health info sites (WebMD, Healthline, Mayo Clinic), forums, social media, educational content, reviews-only sites
 
-Category matching:
-- "water filter" ↔ plumbing, bathroom, filtration ✓
-- "espresso machine" ↔ coffee, kitchen appliances ✓
-- "laptop" ↔ furniture ✗
+CRITICAL: Sites like healthline.com, webmd.com, mayoclinic.org are HEALTH INFO sites, NOT shopping sites!
+If the URL contains: healthline, webmd, mayoclinic, wikipedia, medium, reddit, quora → isShoppingSite = false
 
-JSON response:
-{"isShoppingSite":bool,"siteCategory":"category","matchedResearchId":"id|null","matchScore":0-100,"matchReason":"<15 words"}`;
+STEP 2 - If shopping=true, does category match user research?
+Match examples: "water filter" ↔ plumbing/bathroom/filtration ✓
+Mismatch: "laptop" ↔ furniture ✗
+
+JSON response only:
+{"isShoppingSite":bool,"siteCategory":"category or null","matchedResearchId":"id or null","matchScore":0-100,"matchReason":"<15 words"}`;
 }
 
 /**

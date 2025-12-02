@@ -161,51 +161,35 @@ async function analyzeSiteWithAI(
   request: AnalyzeSiteRequest,
   apiKey: string
 ): Promise<AnalyzeSiteResponse> {
-  // Build the research history for the prompt (with safe access)
+  // Build compact research list
   const researchList = request.researchHistory
-    .slice(0, 10)
-    .map((r) => {
-      const reqs = Array.isArray(r.requirements) ? r.requirements.slice(0, 3).join(', ') : '';
-      return `[${r.id || 'unknown'}] "${r.productName || r.query || 'unknown'}" - Requirements: ${reqs || 'none specified'}`;
-    })
+    .slice(0, 8)
+    .map((r) => `• [${r.id || 'unknown'}] ${r.productName || r.query || 'unknown'}`)
     .join('\n');
 
-  const prompt = `You are analyzing a website to determine if it's a shopping/e-commerce site and if it matches what a user previously researched.
+  // Improved prompt with better non-shopping detection
+  const prompt = `Analyze if this website is an e-commerce site where users can BUY products.
 
-## Website Info:
-- URL: ${request.url}
-- Page Title: ${request.title}
-${request.description ? `- Meta Description: ${request.description}` : ''}
+URL: ${request.url}
+Title: ${request.title}
+${request.description ? `Description: ${request.description.slice(0, 150)}` : ''}
 
-## User's Previous Product Research:
+User's product research:
 ${researchList}
 
-## Your Task:
-1. Is this a shopping/e-commerce site where users can buy products? (Not just a blog, news site, or informational page)
-2. If yes, what product category does this page/site sell?
-3. Does this match ANY of the user's research items? Match by product category, not exact words.
+STEP 1 - Is this a SHOPPING site? Check for:
+✓ SHOPPING indicators: "add to cart", "buy now", product listings with prices, checkout, shopping cart
+✗ NOT SHOPPING: blog, news, Wikipedia, health info sites (WebMD, Healthline, Mayo Clinic), forums, social media, educational content, reviews-only sites
 
-Examples of MATCHES:
-- Research "shower water filter" → Site selling "bathroom fixtures" or "water filtration" = MATCH
-- Research "espresso machine" → Site selling "coffee equipment" or "kitchen appliances" = MATCH
-- Research "running shoes" → Site selling "athletic footwear" or "sports gear" = MATCH
+CRITICAL: Sites like healthline.com, webmd.com, mayoclinic.org are HEALTH INFO sites, NOT shopping sites!
+If the URL contains: healthline, webmd, mayoclinic, wikipedia, medium, reddit, quora → isShoppingSite = false
 
-Examples of NON-MATCHES:
-- Research "laptop" → Site selling "furniture" = NO MATCH
-- Research "water filter" → Blog about water quality = NO MATCH (not a shopping site)
-- Research "headphones" → Amazon homepage with no search = WEAK MATCH (too generic)
+STEP 2 - If shopping=true, does category match user research?
+Match examples: "water filter" ↔ plumbing/bathroom/filtration ✓
+Mismatch: "laptop" ↔ furniture ✗
 
-## Response (JSON only):
-{
-  "isShoppingSite": true/false,
-  "siteCategory": "what this site/page sells",
-  "matchedResearchId": "ID from research list if matched, or null",
-  "matchScore": 0-100,
-  "matchReason": "brief explanation"
-}
-
-Be smart about fuzzy matching - "bathroom water filter" matches "shower filter research".
-Only return matchScore > 50 if there's a genuine category/product match.`;
+JSON response only:
+{"isShoppingSite":bool,"siteCategory":"category or null","matchedResearchId":"id or null","matchScore":0-100,"matchReason":"<15 words"}`;
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -404,98 +388,65 @@ async function rankWithOpenAI(
 }
 
 function buildPrompt(context: ProductContext, products: ProductData[], userProfile?: UserProfile | null): string {
+  // Compact product format (saves ~40% tokens)
   const productList = products
     .map((p, i) => {
-      const priceStr = p.price ? `$${p.price.toFixed(2)}` : 'Price unknown';
-      const ratingStr = p.rating ? `${p.rating}★ (${p.reviewCount?.toLocaleString() || '?'} reviews)` : 'No rating';
-      const featuresStr = p.features?.length ? `Features: ${p.features.slice(0, 4).join('; ')}` : '';
-      
-      return `[${i}] ${p.title}
-    Price: ${priceStr}
-    Rating: ${ratingStr}
-    ${p.description ? `Info: ${p.description.slice(0, 200)}` : ''}
-    ${featuresStr}`;
+      const parts = [
+        `[${i}] ${p.title.slice(0, 80)}`,
+        p.price ? `$${p.price.toFixed(2)}` : '?',
+        p.rating ? `${p.rating}★/${p.reviewCount?.toLocaleString() || '?'}` : 'unrated',
+      ];
+      if (p.features?.length) parts.push(p.features.slice(0, 3).join(', '));
+      if (p.description) parts.push(p.description.slice(0, 100));
+      return parts.join(' | ');
     })
-    .join('\n\n');
+    .join('\n');
 
-  // Build conversation context if available
-  let conversationContext = '';
-  if (context.recentMessages && context.recentMessages.length > 0) {
-    conversationContext = `
-## Their research conversation:
-${context.recentMessages.map(m => `${m.role === 'user' ? 'USER' : 'AI'}: ${m.content.slice(0, 300)}${m.content.length > 300 ? '...' : ''}`).join('\n')}
-`;
+  // Compact requirements
+  const reqs = context.requirements.length > 0 
+    ? context.requirements.map((r, i) => `R${i+1}: ${r}`).join('\n')
+    : 'none specified';
+
+  // Compact user profile with clear penalties
+  let profileStr = '';
+  if (userProfile) {
+    const parts: string[] = [];
+    if (userProfile.avoids?.length) parts.push(`AVOID (penalty -25 each): ${userProfile.avoids.slice(0, 5).join(', ')}`);
+    if (userProfile.prefers?.length) parts.push(`PREFER (bonus +10 each): ${userProfile.prefers.slice(0, 5).join(', ')}`);
+    if (userProfile.priceRange && userProfile.priceRange !== 'unknown') parts.push(`BUDGET: ${userProfile.priceRange}`);
+    if (parts.length) profileStr = `\nUSER PROFILE:\n${parts.join('\n')}`;
   }
 
-  // Products mentioned by ChatGPT
-  let mentionedContext = '';
-  if (context.mentionedProducts && context.mentionedProducts.length > 0) {
-    mentionedContext = `
-## Products ChatGPT recommended:
-${context.mentionedProducts.slice(0, 5).map(p => `• ${p}`).join('\n')}
-(If any of these are available, note the match!)
-`;
+  // ChatGPT recommendations bonus
+  let mentionedStr = '';
+  if (context.mentionedProducts?.length) {
+    mentionedStr = `\nChatGPT RECOMMENDED (bonus +15): ${context.mentionedProducts.slice(0, 3).join(', ')}`;
   }
 
-  // User profile - learned preferences across ALL their research
-  let userProfileContext = '';
-  if (userProfile && (userProfile.values.length > 0 || userProfile.avoids.length > 0 || userProfile.prefers.length > 0)) {
-    userProfileContext = `
-## 🧠 USER PROFILE (learned from their research history):
-${userProfile.values.length > 0 ? `• Values: ${userProfile.values.slice(0, 5).join(', ')}` : ''}
-${userProfile.avoids.length > 0 ? `• AVOIDS (important!): ${userProfile.avoids.slice(0, 5).join(', ')}` : ''}
-${userProfile.prefers.length > 0 ? `• Prefers: ${userProfile.prefers.slice(0, 5).join(', ')}` : ''}
-${userProfile.priorities.length > 0 ? `• Priorities: ${userProfile.priorities.slice(0, 4).join(', ')}` : ''}
-${userProfile.priceRange !== 'unknown' ? `• Price sensitivity: ${userProfile.priceRange}` : ''}
+  return `Rank products for: "${context.query}"
 
-⚠️ CRITICAL: If a product contains something the user AVOIDS (synthetic, plastic, fake leather, etc.), PENALIZE heavily or exclude it!
-`;
-  }
+REQUIREMENTS (check each):
+${reqs}
+${profileStr}${mentionedStr}
 
-  return `You are a sharp product analyst. User researched a product in ChatGPT and is now shopping. Help them decide.
-
-## What they want:
-"${context.query}"
-
-## Their requirements:
-${context.requirements.length > 0 ? context.requirements.map(r => `• ${r}`).join('\n') : '• (No specific requirements stated)'}
-${userProfileContext}${conversationContext}${mentionedContext}
-## Products on this page:
+PRODUCTS:
 ${productList}
 
-## Your analysis:
-1. Does it match their SPECIFIC requirements? Check each one.
-2. Does it CONFLICT with their user profile (things they avoid)? Red flag if so!
-3. Does it align with their values (health-conscious, eco-friendly, etc.)?
-4. Did ChatGPT mention this exact product? Huge plus if so.
-5. Rating good? (4.0+ solid, 4.5+ great)
-6. Price within their budget or expectations?
+SCORING RUBRIC (100 max):
++40 max: Requirements match (10 pts each met)
++25 max: User profile (+10 prefers, -25 avoids violation)
++20 max: Reviews (4.0★=10, 4.5★=15, 4.8★+=20)
++15 max: Value for price
 
-## Response (JSON only):
-{
-  "rankings": [
-    { 
-      "index": 0, 
-      "score": 92, 
-      "reasons": [
-        "✓ ChatGPT specifically recommended this one",
-        "✓ Real leather interior - matches preference for genuine materials",
-        "✓ 4.6★ with 2,400 reviews - highly trusted",
-        "⚠ Contains some plastic trim (user prefers to avoid)"
-      ] 
-    }
-  ],
-  "summary": "Quick 1-sentence verdict considering user's values"
-}
+PENALTIES (subtract from score):
+-25: Contains AVOIDED material (plastic, synthetic, fake leather, PU, faux)
+-15: No reviews/ratings
+-10: Price way over budget
 
-Rules:
-- Score 0-100 based on requirement match + user profile fit + reviews + value
-- PENALIZE products that contain things user explicitly avoids
-- BONUS for products matching user preferences (real leather, natural materials, etc.)
-- BONUS points if ChatGPT mentioned this product
-- Only products scoring 50+
-- Max 5 products
-- Be specific: cite actual features, prices, materials`;
+JSON response only:
+{"rankings":[{"index":0,"score":85,"reasons":["R1 met","R2 met","contains plastic -25","4.5★ +15"]}],"summary":"one sentence verdict"}
+
+Rules: score>50 only, max 5 products, cite specific features`;
 }
 
 function parseAIResponse(content: string): RankProductsResponse {
