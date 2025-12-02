@@ -121,19 +121,26 @@ export default {
 
 async function handleAnalyzeSite(request: Request, env: Env): Promise<Response> {
   if (!env.GROQ_API_KEY) {
-    return jsonResponse({ error: 'Service not configured' }, 500);
+    console.error('GROQ_API_KEY not configured for analyze-site');
+    return jsonResponse({ isShoppingSite: false }); // Graceful fallback instead of error
   }
 
   let body: AnalyzeSiteRequest;
   try {
     body = await request.json();
-  } catch {
-    return jsonResponse({ error: 'Invalid JSON' }, 400);
+  } catch (e) {
+    console.error('Invalid JSON in analyze-site request:', e);
+    return jsonResponse({ isShoppingSite: false }); // Graceful fallback
   }
 
-  if (!body.url || !body.title) {
-    return jsonResponse({ error: 'Missing url or title' }, 400);
+  // URL is required, title can be empty
+  if (!body.url) {
+    console.log('Missing URL in analyze-site request');
+    return jsonResponse({ isShoppingSite: false });
   }
+  
+  // Ensure title has a fallback
+  body.title = body.title || 'Unknown Page';
 
   // No research history = nothing to match
   if (!body.researchHistory || body.researchHistory.length === 0) {
@@ -154,10 +161,13 @@ async function analyzeSiteWithAI(
   request: AnalyzeSiteRequest,
   apiKey: string
 ): Promise<AnalyzeSiteResponse> {
-  // Build the research history for the prompt
+  // Build the research history for the prompt (with safe access)
   const researchList = request.researchHistory
     .slice(0, 10)
-    .map((r, i) => `[${r.id}] "${r.productName}" - Requirements: ${r.requirements.slice(0, 3).join(', ') || 'none specified'}`)
+    .map((r) => {
+      const reqs = Array.isArray(r.requirements) ? r.requirements.slice(0, 3).join(', ') : '';
+      return `[${r.id || 'unknown'}] "${r.productName || r.query || 'unknown'}" - Requirements: ${reqs || 'none specified'}`;
+    })
     .join('\n');
 
   const prompt = `You are analyzing a website to determine if it's a shopping/e-commerce site and if it matches what a user previously researched.
