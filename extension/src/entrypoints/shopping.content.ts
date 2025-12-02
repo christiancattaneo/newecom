@@ -545,123 +545,371 @@ function scrapeLowes(): ProductData[] {
   return products;
 }
 
-// Generic scraper for ANY site - looks for common e-commerce patterns
+// Generic scraper for ANY site - multiple strategies for finding products
 function scrapeGeneric(): ProductData[] {
-  const products: ProductData[] = [];
   console.log('[Sift] Using generic scraper for:', window.location.hostname);
   
-  // Look for common product patterns
   // Strategy 1: Single product page detection
   const singleProduct = scrapeSingleProductPage();
   if (singleProduct) {
-    products.push(singleProduct);
+    console.log('[Sift] Found single product page');
+    return [singleProduct];
+  }
+  
+  // Strategy 2: Look for common product card patterns
+  let products = scrapeByProductCards();
+  if (products.length >= 2) {
+    console.log('[Sift] Found products via card patterns:', products.length);
     return products;
   }
   
-  // Strategy 2: Look for product cards/grids
-  const productSelectors = [
-    '[data-product]', '[data-sku]', '[data-item]',
-    '.product-card', '.product-item', '.product-tile',
-    '[class*="product-card"]', '[class*="productCard"]',
-    '[class*="ProductCard"]', '[class*="product-item"]',
-    'article[class*="product"]', 'div[class*="product"]',
-    '.sku-item', '.search-result-item', '.listing-item',
-  ];
+  // Strategy 3: Find elements with prices and work backwards
+  products = scrapeByPriceElements();
+  if (products.length >= 2) {
+    console.log('[Sift] Found products via price detection:', products.length);
+    return products;
+  }
   
-  for (const selector of productSelectors) {
-    const items = document.querySelectorAll(selector);
-    if (items.length >= 2) {
-      console.log('[Sift] Found product pattern:', selector, items.length);
-      items.forEach((item, index) => {
-        if (index >= 10) return;
-        
-        // Try to find title
-        const titleEl = item.querySelector('h2, h3, h4, a[class*="title"], [class*="name"], [class*="Title"]');
-        if (!titleEl) return;
-        
-        // Try to find price
-        let priceText = '';
-        const priceEl = item.querySelector('[class*="price"], [class*="Price"], .price, span[class*="$"]');
-        if (priceEl?.textContent) {
-          const match = priceEl.textContent.match(/\$?([\d,]+\.?\d*)/);
-          if (match) priceText = match[1].replace(',', '');
-        }
-        
-        // Try to find link
-        const linkEl = (item.querySelector('a[href*="/product"], a[href*="/p/"], a[href*="/dp/"]') || 
-                       item.querySelector('a')) as HTMLAnchorElement;
-        
-        // Try to find image
-        const imageEl = item.querySelector('img') as HTMLImageElement;
-        
-        products.push({
-          title: titleEl.textContent?.trim() || '',
-          price: priceText ? parseFloat(priceText) : null,
-          url: linkEl?.href || window.location.href,
-          description: '',
-          imageUrl: imageEl?.src,
-        });
-      });
-      
-      if (products.length > 0) break;
-    }
+  // Strategy 4: Look for repeated list structures (li, article, div grids)
+  products = scrapeByRepeatedElements();
+  if (products.length >= 2) {
+    console.log('[Sift] Found products via repeated elements:', products.length);
+    return products;
+  }
+  
+  // Strategy 5: Find links with images (likely product cards)
+  products = scrapeByImageLinks();
+  if (products.length >= 2) {
+    console.log('[Sift] Found products via image links:', products.length);
+    return products;
   }
 
   console.log('[Sift] Generic scrape found:', products.length, 'products');
   return products;
 }
 
-function scrapeSingleProductPage(): ProductData | null {
-  // Common single product page patterns
+function scrapeByProductCards(): ProductData[] {
+  const products: ProductData[] = [];
+  
+  const productSelectors = [
+    '[data-product]', '[data-sku]', '[data-item]', '[data-id]',
+    '.product-card', '.product-item', '.product-tile', '.product',
+    '[class*="product-card"]', '[class*="productCard"]', '[class*="ProductCard"]',
+    '[class*="product-item"]', '[class*="productItem"]',
+    'article[class*="product"]', 'div[class*="product"]',
+    '.sku-item', '.search-result-item', '.listing-item',
+    '.item-card', '.card', '[class*="listing"]',
+    '.vehicle-card', '.car-card', '[class*="vehicle"]', '[class*="listing-card"]',
+  ];
+  
+  for (const selector of productSelectors) {
+    try {
+      const items = document.querySelectorAll(selector);
+      if (items.length >= 2) {
+        console.log('[Sift] Trying selector:', selector, 'found:', items.length);
+        items.forEach((item, index) => {
+          if (index >= 12) return;
+          const product = extractProductFromElement(item);
+          if (product) products.push(product);
+        });
+        if (products.length >= 2) break;
+      }
+    } catch (e) {
+      // Invalid selector, skip
+    }
+  }
+  
+  return products;
+}
+
+function scrapeByPriceElements(): ProductData[] {
+  const products: ProductData[] = [];
+  const seen = new Set<string>();
+  
+  // Find all elements containing price patterns
+  const allElements = document.querySelectorAll('*');
+  const priceElements: Element[] = [];
+  
+  allElements.forEach(el => {
+    const text = el.textContent || '';
+    // Look for price patterns: $X,XXX or $XXX.XX
+    if (/\$[\d,]+\.?\d*/.test(text) && text.length < 50) {
+      // Check if this is a leaf or near-leaf element
+      if (el.children.length <= 2) {
+        priceElements.push(el);
+      }
+    }
+  });
+  
+  console.log('[Sift] Found price elements:', priceElements.length);
+  
+  // For each price, find the containing product card
+  for (const priceEl of priceElements.slice(0, 20)) {
+    // Walk up to find a reasonable container
+    let container = priceEl.parentElement;
+    for (let i = 0; i < 5 && container; i++) {
+      // Good container if it has both a link and the price
+      const hasLink = container.querySelector('a[href]');
+      const hasImage = container.querySelector('img');
+      const hasHeading = container.querySelector('h1, h2, h3, h4, h5, a');
+      
+      if (hasLink && (hasImage || hasHeading)) {
+        const product = extractProductFromElement(container);
+        if (product && !seen.has(product.title.toLowerCase())) {
+          seen.add(product.title.toLowerCase());
+          products.push(product);
+        }
+        break;
+      }
+      container = container.parentElement;
+    }
+    
+    if (products.length >= 10) break;
+  }
+  
+  return products;
+}
+
+function scrapeByRepeatedElements(): ProductData[] {
+  const products: ProductData[] = [];
+  
+  // Find grids/lists that might contain products
+  const gridSelectors = [
+    'ul > li', 'ol > li',
+    '[class*="grid"] > div', '[class*="Grid"] > div',
+    '[class*="list"] > div', '[class*="List"] > div',
+    '[class*="results"] > div', '[class*="Results"] > div',
+    'main article', 'section article',
+    '[role="list"] > *', '[role="listitem"]',
+  ];
+  
+  for (const selector of gridSelectors) {
+    try {
+      const items = document.querySelectorAll(selector);
+      // Need at least 3 similar items
+      if (items.length >= 3) {
+        // Check if items have similar structure (likely products)
+        let validCount = 0;
+        items.forEach((item, index) => {
+          if (index >= 12) return;
+          const hasPrice = (item.textContent || '').includes('$');
+          const hasLink = item.querySelector('a');
+          if (hasPrice && hasLink) validCount++;
+        });
+        
+        if (validCount >= 3) {
+          console.log('[Sift] Found repeated structure:', selector, 'valid:', validCount);
+          items.forEach((item, index) => {
+            if (index >= 12) return;
+            const product = extractProductFromElement(item);
+            if (product) products.push(product);
+          });
+        }
+        
+        if (products.length >= 3) break;
+      }
+    } catch (e) {
+      // Invalid selector, skip
+    }
+  }
+  
+  return products;
+}
+
+function scrapeByImageLinks(): ProductData[] {
+  const products: ProductData[] = [];
+  const seen = new Set<string>();
+  
+  // Find all links that contain images (likely product cards)
+  const imageLinks = document.querySelectorAll('a img');
+  
+  imageLinks.forEach((img, index) => {
+    if (index >= 20 || products.length >= 10) return;
+    
+    // Find the parent link
+    const link = img.closest('a') as HTMLAnchorElement;
+    if (!link || !link.href || link.href === '#') return;
+    
+    // Find a reasonable container
+    let container = link.parentElement;
+    for (let i = 0; i < 3 && container; i++) {
+      const hasPrice = (container.textContent || '').includes('$');
+      if (hasPrice) {
+        const product = extractProductFromElement(container);
+        if (product && !seen.has(product.url)) {
+          seen.add(product.url);
+          products.push(product);
+        }
+        break;
+      }
+      container = container.parentElement;
+    }
+  });
+  
+  return products;
+}
+
+function extractProductFromElement(element: Element): ProductData | null {
+  // Find title - prioritize headings, then links
+  let title = '';
   const titleSelectors = [
-    'h1[class*="product"]', 'h1[class*="Product"]',
+    'h1', 'h2', 'h3', 'h4', 'h5',
+    '[class*="title"]', '[class*="Title"]', '[class*="name"]', '[class*="Name"]',
+    'a[href]',
+  ];
+  
+  for (const sel of titleSelectors) {
+    const el = element.querySelector(sel);
+    if (el?.textContent?.trim() && el.textContent.trim().length > 3) {
+      title = el.textContent.trim();
+      // Clean up title - remove price if included
+      title = title.replace(/\$[\d,]+\.?\d*/g, '').trim();
+      if (title.length > 5 && title.length < 200) break;
+    }
+  }
+  
+  if (!title || title.length < 5) return null;
+  
+  // Find price
+  let price: number | null = null;
+  const text = element.textContent || '';
+  const priceMatch = text.match(/\$\s*([\d,]+\.?\d*)/);
+  if (priceMatch) {
+    price = parseFloat(priceMatch[1].replace(/,/g, ''));
+  }
+  
+  // Find URL
+  let url = window.location.href;
+  const linkEl = element.querySelector('a[href]') as HTMLAnchorElement;
+  if (linkEl?.href && linkEl.href !== '#' && !linkEl.href.startsWith('javascript:')) {
+    url = linkEl.href;
+  }
+  
+  // Find image
+  let imageUrl: string | undefined;
+  const imgEl = element.querySelector('img') as HTMLImageElement;
+  if (imgEl?.src && !imgEl.src.includes('data:') && !imgEl.src.includes('placeholder')) {
+    imageUrl = imgEl.src;
+  }
+  
+  // Get any description text
+  const descEl = element.querySelector('[class*="desc"], [class*="Desc"], p');
+  const description = descEl?.textContent?.trim().slice(0, 300) || '';
+  
+  return {
+    title: title.slice(0, 150),
+    price,
+    url,
+    description,
+    imageUrl,
+  };
+}
+
+function scrapeSingleProductPage(): ProductData | null {
+  // Detect if this is a single product page by looking for key indicators
+  const url = window.location.href.toLowerCase();
+  const pathname = window.location.pathname.toLowerCase();
+  
+  // Check URL patterns that suggest single product
+  const productUrlPatterns = [
+    /\/product\//i, /\/p\//i, /\/dp\//i, /\/item\//i,
+    /\/vehicle\//i, /\/car\//i, /\/inventory\//i,
+    /\/listing\//i, /\/detail/i, /\/view\//i,
+    /[\/-]\d{4,}/, // ID in URL
+  ];
+  
+  const isLikelyProductPage = productUrlPatterns.some(p => p.test(pathname));
+  
+  // Title selectors - look for main heading
+  const titleSelectors = [
+    'h1[class*="product"]', 'h1[class*="Product"]', 'h1[class*="title"]',
+    'h1[class*="name"]', 'h1[class*="Name"]', 'h1[class*="heading"]',
     'h1[data-testid*="product"]', 'h1[data-testid*="title"]',
     '[class*="product-title"]', '[class*="productTitle"]',
+    '[class*="vehicle-title"]', '[class*="listing-title"]',
     '[itemprop="name"]', '#productTitle', '.product-name h1',
+    'main h1', 'article h1', // Generic fallbacks
   ];
   
   let title = '';
   for (const sel of titleSelectors) {
     const el = document.querySelector(sel);
-    if (el?.textContent?.trim()) {
+    if (el?.textContent?.trim() && el.textContent.trim().length > 5) {
       title = el.textContent.trim();
       break;
     }
   }
   
-  if (!title) return null;
+  // Fallback: just grab the first h1 if on a product-like URL
+  if (!title && isLikelyProductPage) {
+    const h1 = document.querySelector('h1');
+    if (h1?.textContent?.trim()) {
+      title = h1.textContent.trim();
+    }
+  }
   
-  // Find price
+  if (!title || title.length < 5) return null;
+  
+  // Find price - search entire page for price patterns
   let price: number | null = null;
   const priceSelectors = [
     '[class*="price"]:not([class*="prices"])', '[itemprop="price"]',
     '[data-testid*="price"]', '.product-price', '#priceblock',
+    '[class*="Price"]', '.price', '#price',
+    '[class*="cost"]', '[class*="amount"]',
   ];
   
   for (const sel of priceSelectors) {
     const el = document.querySelector(sel);
     if (el?.textContent) {
-      const match = el.textContent.match(/\$?([\d,]+\.?\d*)/);
+      const match = el.textContent.match(/\$\s*([\d,]+\.?\d*)/);
       if (match) {
-        price = parseFloat(match[1].replace(',', ''));
+        price = parseFloat(match[1].replace(/,/g, ''));
         break;
       }
     }
   }
   
-  // Find image
+  // Fallback: search body text for first price-like number
+  if (!price) {
+    const bodyText = document.body.textContent || '';
+    const priceMatch = bodyText.match(/\$\s*([\d,]+\.?\d*)/);
+    if (priceMatch) {
+      price = parseFloat(priceMatch[1].replace(/,/g, ''));
+    }
+  }
+  
+  // Find image - main product/hero image
   const imageSelectors = [
     '[class*="product-image"] img', '[class*="productImage"] img',
+    '[class*="hero"] img', '[class*="main-image"] img',
+    '[class*="gallery"] img:first-child', '[class*="Gallery"] img:first-child',
     '[data-testid*="product-image"] img', '#product-image img',
-    '[class*="gallery"] img', 'img[itemprop="image"]',
+    'img[itemprop="image"]', 'main img', 'article img',
   ];
   
   let imageUrl = '';
   for (const sel of imageSelectors) {
     const el = document.querySelector(sel) as HTMLImageElement;
-    if (el?.src) {
+    if (el?.src && !el.src.includes('data:') && !el.src.includes('placeholder') && el.width > 100) {
       imageUrl = el.src;
       break;
+    }
+  }
+  
+  // Fallback: largest image on page
+  if (!imageUrl) {
+    let largestImg: HTMLImageElement | null = null;
+    let maxArea = 0;
+    document.querySelectorAll('img').forEach((img: HTMLImageElement) => {
+      const area = (img.naturalWidth || img.width) * (img.naturalHeight || img.height);
+      if (area > maxArea && img.src && !img.src.includes('data:')) {
+        maxArea = area;
+        largestImg = img;
+      }
+    });
+    if (largestImg && maxArea > 10000) {
+      imageUrl = (largestImg as HTMLImageElement).src;
     }
   }
   
@@ -669,21 +917,23 @@ function scrapeSingleProductPage(): ProductData | null {
   const descSelectors = [
     '[class*="description"]', '[itemprop="description"]',
     '[data-testid*="description"]', '#product-description',
+    '[class*="details"]', '[class*="specs"]', '[class*="overview"]',
+    'main p', 'article p',
   ];
   
   let description = '';
   for (const sel of descSelectors) {
     const el = document.querySelector(sel);
-    if (el?.textContent?.trim()) {
+    if (el?.textContent?.trim() && el.textContent.trim().length > 20) {
       description = el.textContent.trim().slice(0, 500);
       break;
     }
   }
 
-  console.log('[Sift] Found single product:', title.slice(0, 50));
+  console.log('[Sift] Found single product:', title.slice(0, 50), 'Price:', price);
   
   return {
-    title,
+    title: title.slice(0, 200),
     price,
     url: window.location.href,
     description,
