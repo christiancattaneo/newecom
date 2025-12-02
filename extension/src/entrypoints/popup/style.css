@@ -325,11 +325,12 @@ h3 {
   margin-bottom: 8px;
 }
 
-.history-query {
-  font-size: 13px;
+.history-name {
+  font-size: 14px;
   font-weight: 600;
-  color: #10b981;
+  color: #ffffff;
   flex: 1;
+  letter-spacing: -0.2px;
   line-height: 1.3;
 }
 

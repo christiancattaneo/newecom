@@ -17,6 +17,7 @@ interface ProductContext {
 interface ResearchEntry {
   id: string;
   query: string;
+  productName: string;
   requirements: string[];
   categories: string[];
   keywords: string[];
@@ -167,11 +168,14 @@ function renderHistory(history: ResearchEntry[]) {
     // Add 'new' class for newly added entries
     const isNew = newIds.has(entry.id);
     
+    // Use productName if available, fallback to cleaned query
+    const displayName = entry.productName || entry.query.slice(0, 40);
+    
     return `
       <div class="history-item${isNew ? ' new' : ''}" data-index="${index}" data-id="${entry.id}">
         ${isNew ? '<span class="new-badge">NEW</span>' : ''}
         <div class="history-header">
-          <span class="history-query">"${entry.query.slice(0, 40)}${entry.query.length > 40 ? '...' : ''}"</span>
+          <span class="history-name">${displayName}</span>
           <span class="history-time" title="${date.toLocaleString()}">${timeAgo}</span>
         </div>
         <div class="history-categories">${categories}</div>

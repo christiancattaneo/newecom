@@ -28,6 +28,7 @@ interface ProductContext {
 interface ResearchEntry {
   id: string;
   query: string;
+  productName: string;   // Clean, title-cased product name for display
   requirements: string[];
   categories: string[];  // Extracted product categories
   keywords: string[];    // Keywords for matching
@@ -197,6 +198,7 @@ async function addToResearchHistory(context: ProductContext): Promise<void> {
     const entry: ResearchEntry = {
       id: context.conversationId || `research-${Date.now()}`,
       query: context.query,
+      productName: extractProductName(context.query),
       requirements: context.requirements,
       categories,
       keywords,
@@ -277,6 +279,39 @@ function extractKeywords(context: ProductContext): string[] {
   
   // Return unique keywords
   return [...new Set(keywords)].slice(0, 20);
+}
+
+function extractProductName(query: string): string {
+  // Remove common prefixes/suffixes and clean up the product name
+  let cleaned = query
+    // Remove question words and common phrases
+    .replace(/^(what|which|can you|please|i need|i want|looking for|find me|recommend|best|top|good)\s+/gi, '')
+    .replace(/\?+$/, '')
+    // Remove requirement suffixes (for men, under $100, with X, etc.)
+    .replace(/\s+(for\s+(men|women|kids|home|office|outdoor|indoor))\b.*/gi, '')
+    .replace(/\s+(under|less than|around|about)\s*\$?\d+.*/gi, '')
+    .replace(/\s+(with|without|no|that has|that have)\s+.*/gi, '')
+    .replace(/\s*,\s*.*$/, '') // Remove everything after first comma
+    .trim();
+  
+  // Title case
+  cleaned = cleaned
+    .toLowerCase()
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+  
+  // Limit length
+  if (cleaned.length > 40) {
+    cleaned = cleaned.slice(0, 40).trim();
+    // Don't cut mid-word
+    const lastSpace = cleaned.lastIndexOf(' ');
+    if (lastSpace > 20) {
+      cleaned = cleaned.slice(0, lastSpace);
+    }
+  }
+  
+  return cleaned || 'Product Research';
 }
 
 // ============================================
