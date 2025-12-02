@@ -45,6 +45,9 @@ const noHistory = document.getElementById('no-history')!;
 const historyCount = document.getElementById('history-count')!;
 const clearHistoryBtn = document.getElementById('clear-history')!;
 
+// Track known history IDs for highlighting new entries
+let knownHistoryIds: Set<string> = new Set();
+
 // Tab elements
 const tabs = document.querySelectorAll('.tab');
 const tabContents = document.querySelectorAll('.tab-content');
@@ -55,10 +58,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadHistory();
   setupEventListeners();
   setupTabs();
+  setupStorageListener();
   
-  // Refresh every 2 seconds
+  // Refresh current context every 2 seconds
   setInterval(loadContext, 2000);
 });
+
+// Listen for storage changes to update history in real-time
+function setupStorageListener() {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    // Update history when research history changes
+    if (areaName === 'local' && changes['sift:researchHistory']) {
+      console.log('[Sift Popup] Research history updated');
+      loadHistory();
+    }
+    
+    // Update current context when session storage changes
+    if (areaName === 'session' && changes['sift:context']) {
+      console.log('[Sift Popup] Current context updated');
+      loadContext();
+    }
+  });
+}
 
 function setupTabs() {
   tabs.forEach(tab => {
@@ -105,7 +126,15 @@ async function loadHistory() {
     const result = await browser.runtime.sendMessage({ type: 'GET_RESEARCH_HISTORY' });
     const history: ResearchEntry[] = result || [];
     
-    historyCount.textContent = String(history.length);
+    const oldCount = parseInt(historyCount.textContent || '0');
+    const newCount = history.length;
+    historyCount.textContent = String(newCount);
+    
+    // Animate badge if count increased
+    if (newCount > oldCount) {
+      historyCount.classList.add('updated');
+      setTimeout(() => historyCount.classList.remove('updated'), 500);
+    }
     
     if (history.length === 0) {
       historyList.innerHTML = '';
@@ -122,6 +151,9 @@ async function loadHistory() {
 }
 
 function renderHistory(history: ResearchEntry[]) {
+  // Find new entries (not in our known set)
+  const newIds = new Set(history.map(h => h.id).filter(id => !knownHistoryIds.has(id)));
+  
   historyList.innerHTML = history.map((entry, index) => {
     const date = new Date(entry.timestamp);
     const timeAgo = getTimeAgo(entry.timestamp);
@@ -132,8 +164,12 @@ function renderHistory(history: ResearchEntry[]) {
       `<span class="req-tag">${r}</span>`
     ).join('');
     
+    // Add 'new' class for newly added entries
+    const isNew = newIds.has(entry.id);
+    
     return `
-      <div class="history-item" data-index="${index}">
+      <div class="history-item${isNew ? ' new' : ''}" data-index="${index}" data-id="${entry.id}">
+        ${isNew ? '<span class="new-badge">NEW</span>' : ''}
         <div class="history-header">
           <span class="history-query">"${entry.query.slice(0, 40)}${entry.query.length > 40 ? '...' : ''}"</span>
           <span class="history-time" title="${date.toLocaleString()}">${timeAgo}</span>
@@ -147,6 +183,19 @@ function renderHistory(history: ResearchEntry[]) {
       </div>
     `;
   }).join('');
+  
+  // Update known IDs
+  knownHistoryIds = new Set(history.map(h => h.id));
+  
+  // Remove 'new' class after animation
+  setTimeout(() => {
+    historyList.querySelectorAll('.history-item.new').forEach(el => {
+      el.classList.remove('new');
+    });
+    historyList.querySelectorAll('.new-badge').forEach(el => {
+      el.remove();
+    });
+  }, 3000);
   
   // Add event listeners for buttons
   historyList.querySelectorAll('.btn-use').forEach(btn => {
