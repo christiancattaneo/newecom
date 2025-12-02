@@ -80,44 +80,35 @@
 
       <!-- SHOP TAB -->
       <div id="tab-shop" class="tab-content">
-        <section id="shop-context">
-          <div id="shop-context-label" class="shop-label">
-            <span class="label-text">Shopping for:</span>
-            <span id="shop-product-name" class="product-name">-</span>
+        <section id="shop-active" class="hidden">
+          <div class="shop-ready-card">
+            <div class="shop-ready-icon">✨</div>
+            <div class="shop-ready-label">Ready to shop</div>
+            <div id="shop-product-name" class="shop-ready-product">-</div>
           </div>
-        </section>
-
-        <section id="shop-store-section">
-          <label for="store-select">Select store:</label>
-          <select id="store-select">
-            <option value="">Choose a store...</option>
-            <option value="amazon">Amazon</option>
-            <option value="bestbuy">Best Buy</option>
-            <option value="target">Target</option>
-            <option value="walmart">Walmart</option>
-            <option value="homedepot">Home Depot</option>
-            <option value="lowes">Lowes</option>
-            <option value="newegg">Newegg</option>
-            <option value="costco">Costco</option>
-          </select>
-          <button id="shop-search" class="btn-primary" disabled>Search & Analyze</button>
-        </section>
-
-        <section id="shop-results" class="hidden">
-          <div id="shop-loading" class="loading hidden">
-            <div class="spinner"></div>
-            <p>Finding best products...</p>
+          
+          <div class="shop-instructions">
+            <div class="instruction-item">
+              <span class="instruction-num">1</span>
+              <span>Visit any shopping site (Amazon, Best Buy, etc.)</span>
+            </div>
+            <div class="instruction-item">
+              <span class="instruction-num">2</span>
+              <span>Search for your product</span>
+            </div>
+            <div class="instruction-item">
+              <span class="instruction-num">3</span>
+              <span>Sift automatically analyzes & ranks matches</span>
+            </div>
           </div>
-          <div id="shop-products" class="shop-products">
-            <!-- Product cards will be inserted here -->
-          </div>
-          <div id="shop-summary" class="shop-summary hidden"></div>
+          
+          <div id="shop-requirements" class="shop-requirements"></div>
         </section>
 
         <section id="no-shop-context" class="empty-state">
           <div class="icon">🛒</div>
-          <p>No product selected</p>
-          <p class="hint">Use Current context or select from History</p>
+          <p>No product context yet</p>
+          <p class="hint">Research a product in ChatGPT first</p>
         </section>
       </div>
     </main>

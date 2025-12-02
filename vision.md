@@ -1,6 +1,6 @@
 # Vision: Honey for AI Shopping Research
 
-**One-liner:** A lightweight Chrome extension that silently captures your ChatGPT product research and automatically surfaces the best matching products when you land on a shopping site.
+**One-liner:** A lightweight Chrome extension that silently captures your ChatGPT product research and **automatically** surfaces the best matching products when you land on ANY shopping site.
 
 ---
 
@@ -11,11 +11,18 @@
    - No user action required
    - Captures product requirements in background
    - Always running, zero friction
+   - Builds history of researched products
    
-2. TRIGGER: User clicks link in chat OR navigates to shopping site
-   - Amazon, Best Buy, Target, Walmart, etc.
+2. AUTOMATIC MATCHING: AI determines when you're shopping for something you researched
+   - No store selection or manual matching required
+   - Works on ANY e-commerce site
+   - Matches products based on context (category, keywords, requirements)
    
-3. POP-UP: Overlay appears (like Honey finding coupons)
+3. TRIGGER: User visits any shopping site/product page
+   - AI detects: "This looks like the espresso machine they researched"
+   - Automatically activates when context matches
+   
+4. POP-UP: Overlay appears (like Honey finding coupons)
    
    ┌─────────────────────────────────────────┐
    │ 🎯 Found 3 products matching your needs │
@@ -30,7 +37,7 @@
    │ [View All]  [Dismiss]                   │
    └─────────────────────────────────────────┘
 
-4. FAST: Results in <2 seconds
+5. FAST: Results in <2 seconds
 ```
 
 ---
@@ -39,9 +46,10 @@
 
 | Principle | What it means |
 |-----------|---------------|
+| **Fully automatic** | NEVER ask user to choose/select stores - AI matches automatically |
 | **Silent until useful** | Never interrupts, only helps when relevant |
 | **Context-aware** | Knows what you researched in ChatGPT |
-| **Store-specific** | Shows products FROM the current site only |
+| **Works everywhere** | Any e-commerce site, not hardcoded list |
 | **Fast** | Instant results, no loading spinners |
 | **Simple** | One overlay, clear ranking, done |
 
