@@ -167,8 +167,8 @@ async function analyzeSiteWithAI(
     .map((r) => `• [${r.id || 'unknown'}] ${r.productName || r.query || 'unknown'}`)
     .join('\n');
 
-  // Improved prompt with better non-shopping detection
-  const prompt = `Analyze if this website is an e-commerce site where users can BUY products.
+  // Improved prompt with B2B and specialty site support
+  const prompt = `Analyze if this website sells products (any type of purchase/ordering).
 
 URL: ${request.url}
 Title: ${request.title}
@@ -177,16 +177,22 @@ ${request.description ? `Description: ${request.description.slice(0, 150)}` : ''
 User's product research:
 ${researchList}
 
-STEP 1 - Is this a SHOPPING site? Check for:
-✓ SHOPPING indicators: "add to cart", "buy now", product listings with prices, checkout, shopping cart
-✗ NOT SHOPPING: blog, news, Wikipedia, health info sites (WebMD, Healthline, Mayo Clinic), forums, social media, educational content, reviews-only sites
+STEP 1 - Can users PURCHASE or ORDER products here? 
+✓ SHOPPING indicators (ANY of these):
+  - E-commerce: "add to cart", "buy now", checkout, prices
+  - B2B/Manufacturers: "request quote", "request catalog", "contact for pricing", product configurator
+  - Specialty: vehicle dealers, equipment manufacturers, custom products
+  - Product pages with specs/features (even without direct cart)
+  
+✗ NOT SHOPPING (info-only, no purchasing):
+  - Health info: healthline, webmd, mayoclinic
+  - Reference: wikipedia, quora, stackoverflow
+  - Social: reddit, youtube, twitter, facebook
+  - News/blogs without products
 
-CRITICAL: Sites like healthline.com, webmd.com, mayoclinic.org are HEALTH INFO sites, NOT shopping sites!
-If the URL contains: healthline, webmd, mayoclinic, wikipedia, medium, reddit, quora → isShoppingSite = false
-
-STEP 2 - If shopping=true, does category match user research?
-Match examples: "water filter" ↔ plumbing/bathroom/filtration ✓
-Mismatch: "laptop" ↔ furniture ✗
+STEP 2 - If shopping=true, does it match user research?
+Match broadly: "armored car" ↔ "bulletproof vehicle" ✓, "apocalypse car" ↔ "armored SUV" ✓
+Match category + intent, not just exact keywords.
 
 JSON response only:
 {"isShoppingSite":bool,"siteCategory":"category or null","matchedResearchId":"id or null","matchScore":0-100,"matchReason":"<15 words"}`;

@@ -714,7 +714,7 @@ async function analyzeSiteWithAI(pageInfo: {
     }
     
     // Re-check match against current history (history may have changed)
-    if (cachedResult.matchedResearchId && cachedResult.matchScore && cachedResult.matchScore > 50) {
+    if (cachedResult.matchedResearchId && cachedResult.matchScore && cachedResult.matchScore >= 40) {
       const matchedEntry = history.find(h => h.id === cachedResult.matchedResearchId);
       if (matchedEntry) {
         matchedEntry.lastUsed = Date.now();
@@ -779,8 +779,8 @@ async function analyzeSiteWithAI(pageInfo: {
       return { matched: false, matchScore: 0 };
     }
     
-    // Check for match
-    if (result.matchedResearchId && result.matchScore && result.matchScore > 50) {
+    // Check for match (lowered threshold to 40 for B2B/specialty sites)
+    if (result.matchedResearchId && result.matchScore && result.matchScore >= 40) {
       const matchedEntry = history.find(h => h.id === result.matchedResearchId);
       
       if (matchedEntry) {
