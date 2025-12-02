@@ -89,10 +89,26 @@
 
       <!-- SHOP TAB -->
       <div id="tab-shop" class="tab-content">
+        <!-- When we have context AND products on current page -->
+        <section id="shop-results" class="hidden">
+          <div class="shop-header">
+            <div class="shop-header-left">
+              <span class="shop-label">AI Analysis</span>
+              <span id="shop-result-name" class="shop-result-name">-</span>
+            </div>
+          </div>
+          <div id="shop-result-requirements" class="shop-requirements"></div>
+          <div id="shop-summary" class="shop-summary"></div>
+          <div id="shop-products-list" class="shop-products-list">
+            <!-- Ranked products will appear here -->
+          </div>
+        </section>
+
+        <!-- When we have context but NOT on shopping site -->
         <section id="shop-active" class="hidden">
           <div class="shop-ready-card">
             <div class="shop-ready-icon">✨</div>
-            <div class="shop-ready-label">Ready to shop</div>
+            <div class="shop-ready-label">READY TO SHOP</div>
             <div id="shop-product-name" class="shop-ready-product">-</div>
           </div>
           
@@ -114,10 +130,17 @@
           <div id="shop-requirements" class="shop-requirements"></div>
         </section>
 
+        <!-- No context at all -->
         <section id="no-shop-context" class="empty-state">
           <div class="icon">🛒</div>
           <p>No product context yet</p>
           <p class="hint">Research a product in ChatGPT first</p>
+        </section>
+        
+        <!-- Loading state -->
+        <section id="shop-loading" class="hidden">
+          <div class="loading-spinner"></div>
+          <p>Analyzing products...</p>
         </section>
       </div>
     </main>

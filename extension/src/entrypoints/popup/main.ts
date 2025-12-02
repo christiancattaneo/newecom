@@ -565,19 +565,134 @@ function setupEventListeners() {
 // SHOP TAB FUNCTIONS
 // ========================================
 
+// New elements for shop results
+const shopResults = document.getElementById('shop-results') as HTMLElement;
+const shopResultName = document.getElementById('shop-result-name') as HTMLElement;
+const shopResultRequirements = document.getElementById('shop-result-requirements') as HTMLElement;
+const shopSummary = document.getElementById('shop-summary') as HTMLElement;
+const shopProductsList = document.getElementById('shop-products-list') as HTMLElement;
+const shopLoading = document.getElementById('shop-loading') as HTMLElement;
+
 async function loadShopContext() {
   try {
     const result = await browser.runtime.sendMessage({ type: 'CHECK_CONTEXT_EXISTS' });
     
-    if (result?.exists && result.context) {
-      showShopReady(result.context);
-    } else {
+    if (!result?.exists || !result.context) {
       showNoShopContext();
+      return;
+    }
+    
+    // Check if current tab is a shopping site with products
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab.url) {
+      showShopReady(result.context);
+      return;
+    }
+    
+    // Skip non-http pages
+    if (!tab.url.startsWith('http')) {
+      showShopReady(result.context);
+      return;
+    }
+    
+    // Try to get products from current page
+    try {
+      showShopLoading();
+      
+      const products = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_PRODUCTS' });
+      
+      if (products?.products && products.products.length > 0) {
+        // We have products! Rank them
+        const rankings = await browser.runtime.sendMessage({ 
+          type: 'RANK_PRODUCTS', 
+          products: products.products 
+        });
+        
+        if (rankings && !rankings.error && rankings.rankings) {
+          showShopResults(result.context, products.products, rankings);
+        } else {
+          // Ranking failed but we have products
+          showShopReady(result.context);
+        }
+      } else {
+        // No products on this page
+        showShopReady(result.context);
+      }
+    } catch (e) {
+      // Can't communicate with page (not a shopping page)
+      showShopReady(result.context);
     }
   } catch (error) {
     console.error('[Sift Popup] Failed to load shop context:', error);
     showNoShopContext();
   }
+}
+
+function showShopLoading() {
+  shopResults.classList.add('hidden');
+  shopActive.classList.add('hidden');
+  noShopContext.classList.add('hidden');
+  shopLoading.classList.remove('hidden');
+}
+
+function showShopResults(context: ProductContext, products: any[], rankings: any) {
+  shopLoading.classList.add('hidden');
+  shopActive.classList.add('hidden');
+  noShopContext.classList.add('hidden');
+  shopResults.classList.remove('hidden');
+  
+  currentShopContext = context;
+  currentShopProductName = extractProductName(context.query);
+  
+  shopResultName.textContent = `"${currentShopProductName.toLowerCase()}"`;
+  
+  // Show requirements
+  if (context.requirements && context.requirements.length > 0) {
+    shopResultRequirements.innerHTML = context.requirements
+      .slice(0, 6)
+      .map(r => `<span class="req-tag">${r}</span>`)
+      .join('');
+  } else {
+    shopResultRequirements.innerHTML = '';
+  }
+  
+  // Show summary
+  if (rankings.summary) {
+    shopSummary.textContent = '💡 ' + rankings.summary;
+    shopSummary.classList.remove('hidden');
+  } else {
+    shopSummary.classList.add('hidden');
+  }
+  
+  // Sort and display products
+  const sortedRankings = [...rankings.rankings].sort((a, b) => b.score - a.score);
+  
+  shopProductsList.innerHTML = sortedRankings.slice(0, 5).map((rank, i) => {
+    const product = products[rank.index];
+    if (!product) return '';
+    
+    const priceStr = product.price ? `$${product.price.toLocaleString()}` : 'Price N/A';
+    const reasons = rank.reasons?.slice(0, 2).join(', ') || '';
+    
+    return `
+      <div class="shop-product-card">
+        <span class="shop-product-rank">${i + 1}</span>
+        <div class="shop-product-image">
+          ${product.imageUrl 
+            ? `<img src="${product.imageUrl}" alt="" onerror="this.parentElement.innerHTML='<span class=\\'placeholder\\'>📦</span>'">` 
+            : '<span class="placeholder">📦</span>'}
+        </div>
+        <div class="shop-product-info">
+          <div class="shop-product-title">${product.title || 'Unknown Product'}</div>
+          <div>
+            <span class="shop-product-price">${priceStr}</span>
+            <span class="shop-product-score">${rank.score}%</span>
+          </div>
+          <div class="shop-product-reasons">${reasons}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 function extractProductName(query: string): string {
@@ -617,6 +732,8 @@ function showShopReady(context: ProductContext) {
   shopProductName.textContent = currentShopProductName;
   shopActive.classList.remove('hidden');
   noShopContext.classList.add('hidden');
+  shopResults.classList.add('hidden');
+  shopLoading.classList.add('hidden');
   
   // Show requirements
   if (context.requirements && context.requirements.length > 0) {
@@ -633,6 +750,8 @@ function showNoShopContext() {
   currentShopContext = null;
   shopActive.classList.add('hidden');
   noShopContext.classList.remove('hidden');
+  shopResults.classList.add('hidden');
+  shopLoading.classList.add('hidden');
 }
 
 // Set shop context from history entry (used by history "Shop" button)
