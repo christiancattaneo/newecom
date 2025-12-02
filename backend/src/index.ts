@@ -324,7 +324,7 @@ async function rankWithGroq(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'llama-3.1-70b-versatile',
+      model: 'llama-3.3-70b-versatile', // Updated from decommissioned 3.1
       messages: [
         {
           role: 'system',
