@@ -18,4 +18,5 @@ declare module '#imports' {
   export { InvalidMatchPattern, MatchPattern } from 'wxt/utils/match-patterns';
   export { fakeBrowser } from 'wxt/testing';
   export { SHOPPING_DOMAINS, SHOPPING_URL_PATTERNS, SKIP_PATTERNS, isDefinitelyNotShopping, isLikelyShoppingSite, extractDomain } from '../src/utils/siteDetection';
+  export { quickHash, getConversationId, extractProductName, extractQuery, STOP_WORDS, extractKeywords } from '../src/utils/textProcessing';
 }

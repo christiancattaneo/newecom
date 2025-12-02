@@ -5,6 +5,7 @@
  */
 
 import { isDefinitelyNotShopping, extractDomain } from '../utils/siteDetection';
+import { extractProductName, extractKeywords as extractKeywordsUtil, STOP_WORDS } from '../utils/textProcessing';
 
 // Types
 interface ProductContext {
@@ -628,7 +629,7 @@ function extractUserPreferences(context: ProductContext): Partial<UserProfile> {
 }
 
 // Pre-computed stop words Set for O(1) lookup
-const STOP_WORDS = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'are', 'was', 'were', 'been', 'being', 'best', 'good', 'great', 'need', 'want', 'looking']);
+// STOP_WORDS imported from ../utils/textProcessing
 
 function extractCategories(context: ProductContext): string[] {
   // Build text once, reuse for both functions
@@ -650,24 +651,8 @@ function extractCategories(context: ProductContext): string[] {
 }
 
 function extractKeywords(context: ProductContext): string[] {
-  const text = buildContextText(context);
-  
-  // Single pass: extract words and dedupe in one loop
-  const seen = new Set<string>();
-  const keywords: string[] = [];
-  
-  // Use exec loop instead of match + filter + Set
-  const regex = /\b[a-z]{3,}\b/g;
-  let match;
-  while ((match = regex.exec(text)) !== null && keywords.length < 20) {
-    const word = match[0];
-    if (!STOP_WORDS.has(word) && !seen.has(word)) {
-      seen.add(word);
-      keywords.push(word);
-    }
-  }
-  
-  return keywords;
+  // Use shared utility after building context text
+  return extractKeywordsUtil(buildContextText(context));
 }
 
 // Shared text builder to avoid duplicate concatenation
@@ -679,42 +664,7 @@ function buildContextText(context: ProductContext): string {
   ].join(' ').toLowerCase();
 }
 
-function extractProductName(query: string): string {
-  // Remove common prefixes/suffixes and clean up the product name
-  let cleaned = query
-    // Remove action phrases at the start
-    .replace(/^(list|rank|compare|show|give|tell|find|search|get|help|me|and)\s+/gi, '')
-    .replace(/^(list|rank|compare|show|give|tell|find|search|get|help|me|and)\s+/gi, '') // Run twice for "list and rank"
-    // Remove question words and common phrases
-    .replace(/^(what|which|can you|please|i need|i want|looking for|find me|recommend|best|top|good|the)\s+/gi, '')
-    .replace(/^(what|which|can you|please|i need|i want|looking for|find me|recommend|best|top|good|the)\s+/gi, '') // Run twice
-    .replace(/\?+$/, '')
-    // Remove requirement suffixes (for men, under $100, with X, etc.)
-    .replace(/\s+(for\s+(men|women|kids|home|office|outdoor|indoor|me|us))\b.*/gi, '')
-    .replace(/\s+(under|less than|around|about)\s*\$?\d+.*/gi, '')
-    .replace(/\s+(with|without|no|that has|that have)\s+.*/gi, '')
-    .replace(/\s*,\s*.*$/, '') // Remove everything after first comma
-    .trim();
-  
-  // Title case
-  cleaned = cleaned
-    .toLowerCase()
-    .split(' ')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-  
-  // Limit length
-  if (cleaned.length > 40) {
-    cleaned = cleaned.slice(0, 40).trim();
-    // Don't cut mid-word
-    const lastSpace = cleaned.lastIndexOf(' ');
-    if (lastSpace > 20) {
-      cleaned = cleaned.slice(0, lastSpace);
-    }
-  }
-  
-  return cleaned || 'Product Research';
-}
+// extractProductName imported from ../utils/textProcessing
 
 // ============================================
 // AI-POWERED SITE ANALYSIS (with caching)

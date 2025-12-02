@@ -7,6 +7,7 @@ declare global {
   const SHOPPING_DOMAINS: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/siteDetection').SHOPPING_DOMAINS
   const SHOPPING_URL_PATTERNS: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/siteDetection').SHOPPING_URL_PATTERNS
   const SKIP_PATTERNS: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/siteDetection').SKIP_PATTERNS
+  const STOP_WORDS: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/textProcessing').STOP_WORDS
   const browser: typeof import('wxt/browser').browser
   const createIframeUi: typeof import('wxt/utils/content-script-ui/iframe').createIframeUi
   const createIntegratedUi: typeof import('wxt/utils/content-script-ui/integrated').createIntegratedUi
@@ -17,10 +18,15 @@ declare global {
   const defineUnlistedScript: typeof import('wxt/utils/define-unlisted-script').defineUnlistedScript
   const defineWxtPlugin: typeof import('wxt/utils/define-wxt-plugin').defineWxtPlugin
   const extractDomain: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/siteDetection').extractDomain
+  const extractKeywords: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/textProcessing').extractKeywords
+  const extractProductName: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/textProcessing').extractProductName
+  const extractQuery: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/textProcessing').extractQuery
   const fakeBrowser: typeof import('wxt/testing').fakeBrowser
+  const getConversationId: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/textProcessing').getConversationId
   const injectScript: typeof import('wxt/utils/inject-script').injectScript
   const isDefinitelyNotShopping: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/siteDetection').isDefinitelyNotShopping
   const isLikelyShoppingSite: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/siteDetection').isLikelyShoppingSite
+  const quickHash: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/textProcessing').quickHash
   const storage: typeof import('wxt/utils/storage').storage
   const useAppConfig: typeof import('wxt/utils/app-config').useAppConfig
 }

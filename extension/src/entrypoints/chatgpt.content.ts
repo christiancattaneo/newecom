@@ -4,6 +4,8 @@
  * Accumulates context over time for smarter recommendations
  */
 
+import { quickHash, getConversationId } from '../utils/textProcessing';
+
 export default defineContentScript({
   matches: ['https://chatgpt.com/*', 'https://chat.openai.com/*'],
   runAt: 'document_idle',
@@ -53,16 +55,7 @@ function createEmptyContext(): ConversationContext {
   };
 }
 
-// Fast hash for change detection (not cryptographic, just for comparison)
-function quickHash(str: string): string {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  return hash.toString(36);
-}
+// quickHash imported from ../utils/textProcessing
 
 function checkExtensionContext(): boolean {
   try {
@@ -72,9 +65,10 @@ function checkExtensionContext(): boolean {
   }
 }
 
-function getConversationId(): string | null {
-  const match = window.location.pathname.match(/\/c\/([a-zA-Z0-9-]+)/);
-  return match ? match[1] : null;
+// getConversationId imported from ../utils/textProcessing
+// Wrapper to use with current window location
+function getCurrentConversationId(): string | null {
+  return getConversationId(window.location.pathname);
 }
 
 // Debounce helper to prevent cascade
@@ -87,7 +81,7 @@ function initCapture() {
     return;
   }
 
-  const convId = getConversationId();
+  const convId = getCurrentConversationId();
   context.conversationId = convId;
 
   console.log('[Sift] Initializing capture, conversation:', convId);
@@ -146,7 +140,7 @@ function watchForNewMessages() {
 }
 
 function scrapeEntireConversation() {
-  const convId = getConversationId();
+  const convId = getCurrentConversationId();
   
   // OPTIMIZATION 1: Skip if same conversation and no changes
   const messageElements = document.querySelectorAll('[data-message-author-role]');
@@ -282,7 +276,7 @@ function watchUrlChanges() {
 }
 
 function handleUrlChange() {
-  const newConvId = getConversationId();
+  const newConvId = getCurrentConversationId();
   
   // Only act if conversation actually changed
   if (newConvId === lastConversationId) {

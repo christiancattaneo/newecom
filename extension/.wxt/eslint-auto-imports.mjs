@@ -23,6 +23,7 @@ const globals = {
   "SHOPPING_DOMAINS": true,
   "SHOPPING_URL_PATTERNS": true,
   "SKIP_PATTERNS": true,
+  "STOP_WORDS": true,
   "ScriptPublicPath": true,
   "ShadowRootContentScriptUi": true,
   "ShadowRootContentScriptUiOptions": true,
@@ -44,10 +45,15 @@ const globals = {
   "defineUnlistedScript": true,
   "defineWxtPlugin": true,
   "extractDomain": true,
+  "extractKeywords": true,
+  "extractProductName": true,
+  "extractQuery": true,
   "fakeBrowser": true,
+  "getConversationId": true,
   "injectScript": true,
   "isDefinitelyNotShopping": true,
   "isLikelyShoppingSite": true,
+  "quickHash": true,
   "storage": true,
   "useAppConfig": true
 }
