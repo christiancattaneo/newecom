@@ -36,6 +36,11 @@ interface ConversationContext {
 let context: ConversationContext = createEmptyContext();
 let isContextValid = true;
 
+// Efficient change detection
+let lastMessageHash = '';
+let lastMessageCount = 0;
+let lastConversationId: string | null = null;
+
 function createEmptyContext(): ConversationContext {
   return {
     conversationId: null,
@@ -46,6 +51,17 @@ function createEmptyContext(): ConversationContext {
     trackedLinks: [],
     lastUpdated: Date.now(),
   };
+}
+
+// Fast hash for change detection (not cryptographic, just for comparison)
+function quickHash(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return hash.toString(36);
 }
 
 function checkExtensionContext(): boolean {
@@ -132,11 +148,33 @@ function watchForNewMessages() {
 function scrapeEntireConversation() {
   const convId = getConversationId();
   
-  // Reset if conversation changed
-  if (convId !== context.conversationId) {
-    console.log('[Sift] New conversation detected, resetting context');
+  // OPTIMIZATION 1: Skip if same conversation and no changes
+  const messageElements = document.querySelectorAll('[data-message-author-role]');
+  const currentCount = messageElements.length;
+  
+  // Quick check: if same conversation and same count, check hash
+  if (convId === lastConversationId && currentCount === lastMessageCount) {
+    // Only compute hash if counts match (hash is more expensive)
+    const currentContent = Array.from(messageElements)
+      .map(el => el.textContent?.slice(0, 100) || '') // Only hash first 100 chars of each message
+      .join('|');
+    const currentHash = quickHash(currentContent);
+    
+    if (currentHash === lastMessageHash) {
+      console.log('[Sift] No changes detected, skipping scrape');
+      return;
+    }
+    lastMessageHash = currentHash;
+  }
+  
+  // OPTIMIZATION 2: Reset only if conversation actually changed
+  if (convId !== lastConversationId) {
+    console.log('[Sift] New conversation detected:', convId);
     context = createEmptyContext();
     context.conversationId = convId;
+    lastConversationId = convId;
+    lastMessageHash = '';
+    lastMessageCount = 0;
   }
 
   // Get ALL user messages
@@ -153,11 +191,21 @@ function scrapeEntireConversation() {
     if (text && text.length > 10) aiMessages.push(text);
   });
 
-  console.log(`[Sift] Found ${userMessages.length} user messages, ${aiMessages.length} AI messages`);
-
-  if (userMessages.length === 0 && aiMessages.length === 0) {
+  const totalMessages = userMessages.length + aiMessages.length;
+  
+  // OPTIMIZATION 3: Only log and process if there's actual content
+  if (totalMessages === 0) {
     return;
   }
+  
+  // OPTIMIZATION 4: Skip if message count same AND we already processed this
+  if (totalMessages === context.messages.length && lastMessageCount > 0) {
+    console.log('[Sift] Same message count, likely no new content');
+    return;
+  }
+  
+  console.log(`[Sift] Processing ${userMessages.length} user + ${aiMessages.length} AI messages`);
+  lastMessageCount = currentCount;
 
   // Build message history
   context.messages = [];
@@ -180,6 +228,12 @@ function scrapeEntireConversation() {
       });
     }
   }
+
+  // Update hash after successful scrape
+  const newContent = Array.from(messageElements)
+    .map(el => el.textContent?.slice(0, 100) || '')
+    .join('|');
+  lastMessageHash = quickHash(newContent);
 
   // Extract structured data
   extractContextFromMessages();
@@ -229,21 +283,33 @@ function watchUrlChanges() {
 
 function handleUrlChange() {
   const newConvId = getConversationId();
-  if (newConvId !== context.conversationId) {
-    console.log('[Sift] Conversation changed to:', newConvId);
-    context = createEmptyContext();
-    context.conversationId = newConvId;
-    hasScrapedOnce = false;
-    
-    // Single delayed scrape (let page load)
-    setTimeout(() => {
-      scrapeEntireConversation();
-      if (context.messages.length > 0) {
-        showCaptureIndicator('prompt');
-        hasScrapedOnce = true;
-      }
-    }, 2000);
+  
+  // Only act if conversation actually changed
+  if (newConvId === lastConversationId) {
+    console.log('[Sift] Same conversation, URL params may have changed but ignoring');
+    return;
   }
+  
+  console.log('[Sift] Conversation changed:', lastConversationId, '→', newConvId);
+  
+  // Reset tracking state
+  lastConversationId = newConvId;
+  lastMessageHash = '';
+  lastMessageCount = 0;
+  hasScrapedOnce = false;
+  
+  // Reset context
+  context = createEmptyContext();
+  context.conversationId = newConvId;
+  
+  // Single delayed scrape (let page load)
+  setTimeout(() => {
+    scrapeEntireConversation();
+    if (context.messages.length > 0) {
+      showCaptureIndicator('prompt');
+      hasScrapedOnce = true;
+    }
+  }, 2000);
 }
 
 function addUserMessage(content: string) {
