@@ -1,6 +1,7 @@
 /**
  * Background Service Worker
  * Orchestrates communication between content scripts and API
+ * Manages persistent research history for intelligent matching
  */
 
 // Types
@@ -23,6 +24,18 @@ interface ProductContext {
   }>;
 }
 
+// Persistent research history entry
+interface ResearchEntry {
+  id: string;
+  query: string;
+  requirements: string[];
+  categories: string[];  // Extracted product categories
+  keywords: string[];    // Keywords for matching
+  timestamp: number;
+  lastUsed: number;
+  conversationId?: string;
+}
+
 interface ProductData {
   title: string;
   price: number | null;
@@ -41,11 +54,29 @@ interface RankingResult {
 }
 
 // Storage keys
-const CONTEXT_KEY = 'sift:context';
+const CONTEXT_KEY = 'sift:context';           // Current session context
+const HISTORY_KEY = 'sift:researchHistory';   // Persistent research history
 const API_URL_KEY = 'sift:apiUrl';
 
 // Production API URL
 const DEFAULT_API_URL = 'https://sift-api.christiandcattaneo.workers.dev';
+
+// Product categories for intelligent matching
+const PRODUCT_CATEGORIES: Record<string, string[]> = {
+  'water-filter': ['water filter', 'shower filter', 'faucet filter', 'reverse osmosis', 'filtration', 'fluoride', 'chlorine', 'purifier'],
+  'electronics': ['laptop', 'computer', 'phone', 'tablet', 'monitor', 'keyboard', 'mouse', 'headphones', 'earbuds', 'speaker', 'camera', 'tv', 'television'],
+  'appliances': ['refrigerator', 'washer', 'dryer', 'dishwasher', 'microwave', 'oven', 'vacuum', 'air purifier', 'humidifier', 'dehumidifier', 'air conditioner'],
+  'furniture': ['desk', 'chair', 'table', 'sofa', 'couch', 'bed', 'mattress', 'bookshelf', 'cabinet', 'dresser'],
+  'fitness': ['treadmill', 'bike', 'weights', 'dumbbells', 'yoga mat', 'resistance bands', 'fitness tracker', 'gym equipment'],
+  'kitchen': ['blender', 'mixer', 'coffee maker', 'espresso', 'toaster', 'air fryer', 'instant pot', 'cookware', 'knife', 'pan', 'pot'],
+  'outdoor': ['grill', 'lawn mower', 'garden', 'patio', 'tent', 'camping', 'hiking', 'backpack'],
+  'beauty': ['skincare', 'makeup', 'haircare', 'shampoo', 'conditioner', 'moisturizer', 'serum', 'sunscreen'],
+  'clothing': ['shoes', 'sneakers', 'boots', 'jacket', 'coat', 'pants', 'jeans', 'shirt', 'dress', 'athletic wear'],
+  'tools': ['drill', 'saw', 'hammer', 'screwdriver', 'wrench', 'tool set', 'power tool'],
+  'baby': ['stroller', 'car seat', 'crib', 'baby monitor', 'diaper', 'bottle', 'formula'],
+  'pet': ['dog food', 'cat food', 'pet bed', 'leash', 'collar', 'litter', 'aquarium'],
+  'gaming': ['gaming', 'console', 'playstation', 'xbox', 'nintendo', 'gaming chair', 'gaming mouse', 'gaming keyboard'],
+};
 
 export default defineBackground(() => {
   console.log('[Sift] Background service worker started');
@@ -53,7 +84,7 @@ export default defineBackground(() => {
   // Listen for messages from content scripts
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleMessage(message, sender).then(sendResponse);
-    return true; // Keep channel open for async response
+    return true;
   });
 
   // Listen for tab navigation to detect shopping sites
@@ -62,6 +93,9 @@ export default defineBackground(() => {
       checkIfShoppingSite(details.tabId, details.url);
     }
   });
+
+  // Clean up old history entries (older than 30 days)
+  cleanupOldHistory();
 });
 
 async function handleMessage(message: any, sender: chrome.runtime.MessageSender) {
@@ -81,15 +115,30 @@ async function handleMessage(message: any, sender: chrome.runtime.MessageSender)
     case 'CHECK_CONTEXT_EXISTS':
       return checkContextExists();
     
+    case 'GET_RESEARCH_HISTORY':
+      return getResearchHistory();
+    
+    case 'MATCH_CATEGORY':
+      return matchCategory(message.pageInfo);
+    
     default:
       console.warn('[Sift] Unknown message type:', message.type);
       return { error: 'Unknown message type' };
   }
 }
 
+// ============================================
+// CONTEXT MANAGEMENT (Session)
+// ============================================
+
 async function saveContext(context: ProductContext): Promise<{ success: boolean }> {
   try {
+    // Save to session storage (current context)
     await chrome.storage.session.set({ [CONTEXT_KEY]: context });
+    
+    // Also save to persistent history
+    await addToResearchHistory(context);
+    
     console.log('[Sift] Context saved:', context.query);
     return { success: true };
   } catch (error) {
@@ -123,6 +172,351 @@ async function checkContextExists(): Promise<{ exists: boolean; context?: Produc
   return { exists: !!context, context: context || undefined };
 }
 
+// ============================================
+// PERSISTENT RESEARCH HISTORY
+// ============================================
+
+async function addToResearchHistory(context: ProductContext): Promise<void> {
+  if (!context.query || context.query.length < 3) return;
+  
+  try {
+    const history = await getResearchHistory();
+    
+    // Extract categories and keywords from the research
+    const categories = extractCategories(context);
+    const keywords = extractKeywords(context);
+    
+    if (categories.length === 0 && keywords.length === 0) return;
+    
+    // Create or update entry
+    const existingIndex = history.findIndex(h => 
+      h.conversationId === context.conversationId ||
+      h.query.toLowerCase() === context.query.toLowerCase()
+    );
+    
+    const entry: ResearchEntry = {
+      id: context.conversationId || `research-${Date.now()}`,
+      query: context.query,
+      requirements: context.requirements,
+      categories,
+      keywords,
+      timestamp: existingIndex >= 0 ? history[existingIndex].timestamp : Date.now(),
+      lastUsed: Date.now(),
+      conversationId: context.conversationId,
+    };
+    
+    if (existingIndex >= 0) {
+      history[existingIndex] = entry;
+    } else {
+      history.unshift(entry);
+    }
+    
+    // Keep only last 50 entries
+    const trimmedHistory = history.slice(0, 50);
+    
+    await chrome.storage.local.set({ [HISTORY_KEY]: trimmedHistory });
+    console.log('[Sift] Research history updated:', categories.join(', '));
+  } catch (error) {
+    console.error('[Sift] Failed to save to history:', error);
+  }
+}
+
+async function getResearchHistory(): Promise<ResearchEntry[]> {
+  try {
+    const result = await chrome.storage.local.get(HISTORY_KEY);
+    return result[HISTORY_KEY] || [];
+  } catch (error) {
+    console.error('[Sift] Failed to get history:', error);
+    return [];
+  }
+}
+
+async function cleanupOldHistory(): Promise<void> {
+  try {
+    const history = await getResearchHistory();
+    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+    const filtered = history.filter(h => h.lastUsed > thirtyDaysAgo);
+    
+    if (filtered.length !== history.length) {
+      await chrome.storage.local.set({ [HISTORY_KEY]: filtered });
+      console.log('[Sift] Cleaned up old history entries');
+    }
+  } catch (error) {
+    console.error('[Sift] Failed to cleanup history:', error);
+  }
+}
+
+function extractCategories(context: ProductContext): string[] {
+  const text = [
+    context.query,
+    ...context.requirements,
+    ...(context.mentionedProducts || []),
+  ].join(' ').toLowerCase();
+  
+  const matches: string[] = [];
+  
+  for (const [category, keywords] of Object.entries(PRODUCT_CATEGORIES)) {
+    if (keywords.some(kw => text.includes(kw))) {
+      matches.push(category);
+    }
+  }
+  
+  return matches;
+}
+
+function extractKeywords(context: ProductContext): string[] {
+  const text = [
+    context.query,
+    ...context.requirements,
+  ].join(' ').toLowerCase();
+  
+  // Extract significant words (3+ chars, not common words)
+  const stopWords = ['the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'are', 'was', 'were', 'been', 'being', 'best', 'good', 'great', 'need', 'want', 'looking'];
+  const words = text.match(/\b[a-z]{3,}\b/g) || [];
+  const keywords = words.filter(w => !stopWords.includes(w));
+  
+  // Return unique keywords
+  return [...new Set(keywords)].slice(0, 20);
+}
+
+// ============================================
+// INTELLIGENT CATEGORY MATCHING
+// ============================================
+
+async function matchCategory(pageInfo: { url: string; title: string; searchQuery?: string }): Promise<{
+  matched: boolean;
+  context?: ProductContext;
+  matchedEntry?: ResearchEntry;
+  matchScore: number;
+}> {
+  // Get current session context
+  const currentContext = await getContext();
+  
+  // Get research history
+  const history = await getResearchHistory();
+  
+  if (history.length === 0 && !currentContext) {
+    return { matched: false, matchScore: 0 };
+  }
+  
+  // Detect what category the user is browsing
+  const pageCategories = detectPageCategory(pageInfo);
+  const pageKeywords = extractPageKeywords(pageInfo);
+  
+  console.log('[Sift] Page categories:', pageCategories, 'Keywords:', pageKeywords.slice(0, 5));
+  
+  // First check if current context matches
+  if (currentContext) {
+    const currentCategories = extractCategories(currentContext);
+    const currentKeywords = extractKeywords(currentContext);
+    const score = calculateMatchScore(pageCategories, pageKeywords, currentCategories, currentKeywords);
+    
+    if (score > 30) {
+      console.log('[Sift] Current context matches! Score:', score);
+      return { matched: true, context: currentContext, matchScore: score };
+    }
+  }
+  
+  // Check research history for matches
+  let bestMatch: { entry: ResearchEntry; score: number } | null = null;
+  
+  for (const entry of history) {
+    const score = calculateMatchScore(pageCategories, pageKeywords, entry.categories, entry.keywords);
+    
+    if (score > 30 && (!bestMatch || score > bestMatch.score)) {
+      bestMatch = { entry, score };
+    }
+  }
+  
+  if (bestMatch) {
+    console.log('[Sift] Historical match found! Query:', bestMatch.entry.query, 'Score:', bestMatch.score);
+    
+    // Update lastUsed
+    bestMatch.entry.lastUsed = Date.now();
+    await chrome.storage.local.set({ [HISTORY_KEY]: history });
+    
+    // Convert to ProductContext format
+    const matchedContext: ProductContext = {
+      query: bestMatch.entry.query,
+      requirements: bestMatch.entry.requirements,
+      timestamp: bestMatch.entry.timestamp,
+      source: 'chatgpt',
+      conversationId: bestMatch.entry.conversationId,
+    };
+    
+    return { matched: true, context: matchedContext, matchedEntry: bestMatch.entry, matchScore: bestMatch.score };
+  }
+  
+  return { matched: false, matchScore: 0 };
+}
+
+function detectPageCategory(pageInfo: { url: string; title: string; searchQuery?: string }): string[] {
+  const text = [
+    pageInfo.url,
+    pageInfo.title,
+    pageInfo.searchQuery || '',
+  ].join(' ').toLowerCase();
+  
+  const matches: string[] = [];
+  
+  for (const [category, keywords] of Object.entries(PRODUCT_CATEGORIES)) {
+    if (keywords.some(kw => text.includes(kw))) {
+      matches.push(category);
+    }
+  }
+  
+  return matches;
+}
+
+function extractPageKeywords(pageInfo: { url: string; title: string; searchQuery?: string }): string[] {
+  const text = [
+    pageInfo.title,
+    pageInfo.searchQuery || '',
+    // Extract keywords from URL path
+    decodeURIComponent(pageInfo.url).replace(/[^a-zA-Z]/g, ' '),
+  ].join(' ').toLowerCase();
+  
+  const stopWords = ['the', 'and', 'for', 'with', 'that', 'this', 'from', 'www', 'com', 'html', 'search', 'results', 'page'];
+  const words = text.match(/\b[a-z]{3,}\b/g) || [];
+  
+  return [...new Set(words.filter(w => !stopWords.includes(w)))];
+}
+
+function calculateMatchScore(
+  pageCategories: string[],
+  pageKeywords: string[],
+  researchCategories: string[],
+  researchKeywords: string[]
+): number {
+  let score = 0;
+  
+  // Category match: 40 points per match
+  for (const cat of pageCategories) {
+    if (researchCategories.includes(cat)) {
+      score += 40;
+    }
+  }
+  
+  // Keyword match: 5 points per match
+  for (const kw of pageKeywords) {
+    if (researchKeywords.includes(kw)) {
+      score += 5;
+    }
+  }
+  
+  return Math.min(score, 100);
+}
+
+// ============================================
+// SHOPPING SITE DETECTION
+// ============================================
+
+async function checkIfShoppingSite(tabId: number, url: string) {
+  // First check current session context
+  const { exists, context } = await checkContextExists();
+  
+  // Check if this URL matches any tracked link from current session
+  if (exists && context) {
+    const matchedLink = context.trackedLinks?.find(link => {
+      try {
+        const trackedUrl = new URL(link.url);
+        const currentUrl = new URL(url);
+        const trackedDomain = trackedUrl.hostname.replace('www.', '');
+        const currentDomain = currentUrl.hostname.replace('www.', '');
+        return currentDomain.includes(trackedDomain) || trackedDomain.includes(currentDomain);
+      } catch {
+        return false;
+      }
+    });
+
+    if (matchedLink) {
+      console.log('[Sift] TRACKED LINK detected:', matchedLink.domain);
+      await injectAndNotify(tabId, context, true);
+      return;
+    }
+  }
+
+  // For shopping sites: try intelligent category matching
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const pageInfo = {
+      url,
+      title: tab.title || '',
+      searchQuery: extractSearchQuery(url),
+    };
+    
+    const match = await matchCategory(pageInfo);
+    
+    if (match.matched && match.context) {
+      console.log('[Sift] Intelligent match! Score:', match.matchScore);
+      await injectAndNotify(tabId, match.context, false, match.matchScore);
+      return;
+    }
+  } catch (e) {
+    // Tab might not exist anymore
+  }
+
+  // No match found - just try to notify if content script exists
+  if (exists && context) {
+    setTimeout(async () => {
+      await notifyTabWithContext(tabId, context, false);
+    }, 1000);
+  }
+}
+
+function extractSearchQuery(url: string): string {
+  try {
+    const u = new URL(url);
+    // Common search query parameters
+    return u.searchParams.get('k') ||      // Amazon
+           u.searchParams.get('q') ||      // Generic
+           u.searchParams.get('query') ||  // Generic
+           u.searchParams.get('s') ||      // Some sites
+           u.searchParams.get('search') || // Generic
+           '';
+  } catch {
+    return '';
+  }
+}
+
+async function injectAndNotify(tabId: number, context: ProductContext, isTrackedLink: boolean, matchScore?: number) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content-scripts/shopping.js'],
+    });
+    console.log('[Sift] Injected shopping script');
+  } catch (e) {
+    // Script might already be injected
+  }
+  
+  setTimeout(async () => {
+    await notifyTabWithContext(tabId, context, isTrackedLink, matchScore);
+  }, 1500);
+}
+
+async function notifyTabWithContext(tabId: number, context: ProductContext, isTrackedLink: boolean, matchScore?: number) {
+  for (let i = 0; i < 5; i++) {
+    try {
+      await browser.tabs.sendMessage(tabId, { 
+        type: 'CONTEXT_AVAILABLE',
+        context,
+        isTrackedLink,
+        matchScore,
+        isHistoricalMatch: !isTrackedLink && matchScore !== undefined,
+      });
+      console.log('[Sift] Notified tab successfully');
+      return;
+    } catch {
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+}
+
+// ============================================
+// API CALLS
+// ============================================
+
 async function rankProducts(products: ProductData[]): Promise<RankingResult | { error: string }> {
   const context = await getContext();
   
@@ -136,9 +530,7 @@ async function rankProducts(products: ProductData[]): Promise<RankingResult | { 
     
     const response = await fetch(`${apiUrl}/api/rank-products`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         context: {
           query: context.query,
@@ -154,88 +546,9 @@ async function rankProducts(products: ProductData[]): Promise<RankingResult | { 
       throw new Error(`API error: ${response.status}`);
     }
 
-    const result = await response.json();
-    return result as RankingResult;
+    return await response.json() as RankingResult;
   } catch (error) {
     console.error('[Sift] Failed to rank products:', error);
     return { error: 'Failed to analyze products. Please try again.' };
   }
 }
-
-async function checkIfShoppingSite(tabId: number, url: string) {
-  const { exists, context } = await checkContextExists();
-  
-  if (!exists || !context) {
-    console.log('[Sift] No context, skipping');
-    return;
-  }
-
-  // Check if this URL matches any tracked link from ChatGPT
-  const matchedLink = context.trackedLinks?.find(link => {
-    try {
-      const trackedUrl = new URL(link.url);
-      const currentUrl = new URL(url);
-      // Match by domain
-      const trackedDomain = trackedUrl.hostname.replace('www.', '');
-      const currentDomain = currentUrl.hostname.replace('www.', '');
-      return currentDomain.includes(trackedDomain) || trackedDomain.includes(currentDomain);
-    } catch {
-      return false;
-    }
-  });
-
-  if (matchedLink) {
-    console.log('[Sift] TRACKED LINK detected:', matchedLink.domain, url);
-    
-    // Programmatically inject shopping script for tracked links
-    // This works on ANY site, not just predefined list
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        files: ['content-scripts/shopping.js'],
-      });
-      console.log('[Sift] Injected shopping script on tracked link');
-    } catch (e) {
-      console.log('[Sift] Could not inject (might already exist):', e);
-    }
-    
-    // Notify with context
-    setTimeout(async () => {
-      await notifyTabWithContext(tabId, context, true);
-    }, 1500);
-    return;
-  }
-
-  // For non-tracked sites, just try to notify (content script already there from manifest)
-  setTimeout(async () => {
-    await notifyTabWithContext(tabId, context, false);
-  }, 1000);
-}
-
-async function notifyTabWithContext(tabId: number, context: ProductContext, isTrackedLink: boolean) {
-  for (let i = 0; i < 5; i++) {
-    try {
-      await browser.tabs.sendMessage(tabId, { 
-        type: 'CONTEXT_AVAILABLE',
-        context,
-        isTrackedLink,
-      });
-      console.log('[Sift] Notified tab successfully');
-      
-      // Update analysis state for popup
-      await chrome.storage.session.set({ 
-        'sift:analysisState': {
-          tabId,
-          url: (await chrome.tabs.get(tabId)).url,
-          status: 'analyzing',
-          isTrackedLink,
-          timestamp: Date.now(),
-        }
-      });
-      return;
-    } catch {
-      await new Promise(r => setTimeout(r, 500));
-    }
-  }
-}
-

@@ -81,14 +81,24 @@ async function initShoppingAssistant() {
   }
 
   // Listen for context updates from background
-  browser.runtime.onMessage.addListener((message: { type: string; context?: ProductContext }) => {
+  browser.runtime.onMessage.addListener((message: { 
+    type: string; 
+    context?: ProductContext;
+    isTrackedLink?: boolean;
+    matchScore?: number;
+    isHistoricalMatch?: boolean;
+  }) => {
     console.log('[Sift] Received message:', message.type);
     if (message.type === 'CONTEXT_AVAILABLE') {
-      // Context may be passed directly or we fetch it
       const context = message.context;
       if (context) {
-        console.log('[Sift] Context received directly:', context.query);
-        waitForProductsAndAnalyze(context);
+        const matchInfo = {
+          isTrackedLink: message.isTrackedLink || false,
+          matchScore: message.matchScore,
+          isHistoricalMatch: message.isHistoricalMatch || false,
+        };
+        console.log('[Sift] Context received:', context.query, matchInfo);
+        waitForProductsAndAnalyze(context, matchInfo);
       } else {
         browser.runtime.sendMessage({ type: 'GET_CONTEXT' }).then((ctx: ProductContext) => {
           if (ctx) {
@@ -100,7 +110,13 @@ async function initShoppingAssistant() {
   });
 }
 
-function waitForProductsAndAnalyze(context: ProductContext) {
+interface MatchInfo {
+  isTrackedLink: boolean;
+  matchScore?: number;
+  isHistoricalMatch: boolean;
+}
+
+function waitForProductsAndAnalyze(context: ProductContext, matchInfo?: MatchInfo) {
   // Wait for product listings to appear on the page
   let attempts = 0;
   const maxAttempts = 10;
@@ -111,13 +127,13 @@ function waitForProductsAndAnalyze(context: ProductContext) {
     
     if (products.length > 0) {
       console.log('[Sift] Products found, analyzing...');
-      analyzeCurrentPage(context);
+      analyzeCurrentPage(context, matchInfo);
     } else if (attempts < maxAttempts) {
       console.log(`[Sift] Waiting for products... attempt ${attempts}/${maxAttempts}`);
       setTimeout(checkForProducts, 800);
     } else {
       console.log('[Sift] No products found after waiting');
-      showOverlay({ error: 'No products found. Try searching for a product.', context });
+      showOverlay({ error: 'No products found. Try searching for a product.', context, matchInfo });
     }
   };
   
@@ -125,7 +141,7 @@ function waitForProductsAndAnalyze(context: ProductContext) {
   setTimeout(checkForProducts, 1000);
 }
 
-async function analyzeCurrentPage(context: ProductContext) {
+async function analyzeCurrentPage(context: ProductContext, matchInfo?: MatchInfo) {
   if (isAnalyzing) {
     console.log('[Sift] Already analyzing, skipping');
     return;
@@ -135,7 +151,7 @@ async function analyzeCurrentPage(context: ProductContext) {
 
   try {
     // Show loading state
-    showOverlay({ loading: true, context });
+    showOverlay({ loading: true, context, matchInfo });
 
     // Scrape products from current page
     const products = scrapeProducts();
@@ -143,7 +159,7 @@ async function analyzeCurrentPage(context: ProductContext) {
     
     if (products.length === 0) {
       console.log('[Sift] No products found on page');
-      showOverlay({ error: 'No products found on this page. Try a search results page.', context });
+      showOverlay({ error: 'No products found on this page. Try a search results page.', context, matchInfo });
       isAnalyzing = false;
       return;
     }
@@ -157,7 +173,7 @@ async function analyzeCurrentPage(context: ProductContext) {
     });
 
     if ('error' in result) {
-      showOverlay({ error: result.error, context });
+      showOverlay({ error: result.error, context, matchInfo });
     } else {
       // Combine products with rankings
       const rankedProducts: RankedProduct[] = result.rankings
@@ -169,11 +185,11 @@ async function analyzeCurrentPage(context: ProductContext) {
           reasons: ranking.reasons,
         }));
 
-      showOverlay({ products: rankedProducts, context, summary: result.summary });
+      showOverlay({ products: rankedProducts, context, summary: result.summary, matchInfo });
     }
   } catch (error) {
     console.error('[Sift] Analysis error:', error);
-    showOverlay({ error: 'Failed to analyze products', context });
+    showOverlay({ error: 'Failed to analyze products', context, matchInfo });
   } finally {
     isAnalyzing = false;
   }
@@ -673,6 +689,7 @@ function showOverlay(options: {
   products?: RankedProduct[];
   context: ProductContext;
   summary?: string;
+  matchInfo?: MatchInfo;
 }) {
   // Remove existing overlay
   hideOverlay();
@@ -738,12 +755,19 @@ function showOverlay(options: {
       `<span class="sift-req-tag">${r}</span>`
     ).join('');
 
+    const matchBadge = options.matchInfo?.isHistoricalMatch 
+      ? `<span class="sift-match-badge">📚 From your research history</span>`
+      : options.matchInfo?.isTrackedLink 
+        ? `<span class="sift-match-badge">🔗 From ChatGPT link</span>`
+        : '';
+
     content = `
       <div class="sift-header">
         <span class="sift-logo">🎯 Sift</span>
         <span class="sift-subtitle">AI Analysis</span>
         <button class="sift-close" onclick="document.getElementById('sift-overlay').remove()">×</button>
       </div>
+      ${matchBadge ? `<div class="sift-match-info">${matchBadge}</div>` : ''}
       <div class="sift-context">
         <div class="sift-query">"${options.context.query}"</div>
         <div class="sift-req-tags">${reqTags}</div>
@@ -820,6 +844,18 @@ function showOverlay(options: {
         padding: 0 4px;
       }
       .sift-close:hover { color: #fff; }
+      .sift-match-info {
+        padding: 8px 16px;
+        background: linear-gradient(135deg, #1e3a5f 0%, #16213e 100%);
+        border-bottom: 1px solid #2a2a4a;
+      }
+      .sift-match-badge {
+        font-size: 11px;
+        color: #60a5fa;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
       .sift-summary {
         padding: 10px 16px;
         background: #16213e;
