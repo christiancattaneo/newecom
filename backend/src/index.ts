@@ -30,9 +30,18 @@ interface ProductData {
   features?: string[];
 }
 
+interface UserProfile {
+  values: string[];      // e.g., ["health-conscious", "quality-focused"]
+  avoids: string[];      // e.g., ["plastic", "synthetic materials"]
+  prefers: string[];     // e.g., ["real leather", "stainless steel"]
+  priorities: string[];  // e.g., ["durability", "safety"]
+  priceRange: string;    // e.g., "premium", "budget"
+}
+
 interface RankProductsRequest {
   context: ProductContext;
   products: ProductData[];
+  userProfile?: UserProfile | null;
 }
 
 interface AnalyzeSiteRequest {
@@ -271,7 +280,7 @@ async function handleRankProducts(request: Request, env: Env): Promise<Response>
 
   try {
     // Try Groq first (faster), fall back to OpenAI
-    const result = await rankWithGroq(body.context, products, env.GROQ_API_KEY);
+    const result = await rankWithGroq(body.context, products, env.GROQ_API_KEY, body.userProfile);
     return jsonResponse(result);
   } catch (groqError) {
     console.error('Groq error:', groqError);
@@ -279,7 +288,7 @@ async function handleRankProducts(request: Request, env: Env): Promise<Response>
     // Try OpenAI fallback if available
     if (env.OPENAI_API_KEY) {
       try {
-        const result = await rankWithOpenAI(body.context, products, env.OPENAI_API_KEY);
+        const result = await rankWithOpenAI(body.context, products, env.OPENAI_API_KEY, body.userProfile);
         return jsonResponse(result);
       } catch (openaiError) {
         console.error('OpenAI fallback error:', openaiError);
@@ -293,9 +302,10 @@ async function handleRankProducts(request: Request, env: Env): Promise<Response>
 async function rankWithGroq(
   context: ProductContext,
   products: ProductData[],
-  apiKey: string
+  apiKey: string,
+  userProfile?: UserProfile | null
 ): Promise<RankProductsResponse> {
-  const prompt = buildPrompt(context, products);
+  const prompt = buildPrompt(context, products, userProfile);
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -339,9 +349,10 @@ async function rankWithGroq(
 async function rankWithOpenAI(
   context: ProductContext,
   products: ProductData[],
-  apiKey: string
+  apiKey: string,
+  userProfile?: UserProfile | null
 ): Promise<RankProductsResponse> {
-  const prompt = buildPrompt(context, products);
+  const prompt = buildPrompt(context, products, userProfile);
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -382,7 +393,7 @@ async function rankWithOpenAI(
   return parseAIResponse(content);
 }
 
-function buildPrompt(context: ProductContext, products: ProductData[]): string {
+function buildPrompt(context: ProductContext, products: ProductData[], userProfile?: UserProfile | null): string {
   const productList = products
     .map((p, i) => {
       const priceStr = p.price ? `$${p.price.toFixed(2)}` : 'Price unknown';
@@ -416,6 +427,21 @@ ${context.mentionedProducts.slice(0, 5).map(p => `• ${p}`).join('\n')}
 `;
   }
 
+  // User profile - learned preferences across ALL their research
+  let userProfileContext = '';
+  if (userProfile && (userProfile.values.length > 0 || userProfile.avoids.length > 0 || userProfile.prefers.length > 0)) {
+    userProfileContext = `
+## 🧠 USER PROFILE (learned from their research history):
+${userProfile.values.length > 0 ? `• Values: ${userProfile.values.slice(0, 5).join(', ')}` : ''}
+${userProfile.avoids.length > 0 ? `• AVOIDS (important!): ${userProfile.avoids.slice(0, 5).join(', ')}` : ''}
+${userProfile.prefers.length > 0 ? `• Prefers: ${userProfile.prefers.slice(0, 5).join(', ')}` : ''}
+${userProfile.priorities.length > 0 ? `• Priorities: ${userProfile.priorities.slice(0, 4).join(', ')}` : ''}
+${userProfile.priceRange !== 'unknown' ? `• Price sensitivity: ${userProfile.priceRange}` : ''}
+
+⚠️ CRITICAL: If a product contains something the user AVOIDS (synthetic, plastic, fake leather, etc.), PENALIZE heavily or exclude it!
+`;
+  }
+
   return `You are a sharp product analyst. User researched a product in ChatGPT and is now shopping. Help them decide.
 
 ## What they want:
@@ -423,16 +449,17 @@ ${context.mentionedProducts.slice(0, 5).map(p => `• ${p}`).join('\n')}
 
 ## Their requirements:
 ${context.requirements.length > 0 ? context.requirements.map(r => `• ${r}`).join('\n') : '• (No specific requirements stated)'}
-${conversationContext}${mentionedContext}
+${userProfileContext}${conversationContext}${mentionedContext}
 ## Products on this page:
 ${productList}
 
 ## Your analysis:
 1. Does it match their SPECIFIC requirements? Check each one.
-2. Did ChatGPT mention this exact product? Huge plus if so.
-3. Rating good? (4.0+ solid, 4.5+ great)
-4. Enough reviews? (100+ decent, 1000+ reliable)
-5. Price within their budget or expectations?
+2. Does it CONFLICT with their user profile (things they avoid)? Red flag if so!
+3. Does it align with their values (health-conscious, eco-friendly, etc.)?
+4. Did ChatGPT mention this exact product? Huge plus if so.
+5. Rating good? (4.0+ solid, 4.5+ great)
+6. Price within their budget or expectations?
 
 ## Response (JSON only):
 {
@@ -442,21 +469,23 @@ ${productList}
       "score": 92, 
       "reasons": [
         "✓ ChatGPT specifically recommended this one",
+        "✓ Real leather interior - matches preference for genuine materials",
         "✓ 4.6★ with 2,400 reviews - highly trusted",
-        "✓ Description confirms fluoride removal",
-        "⚠ $45 is reasonable for quality"
+        "⚠ Contains some plastic trim (user prefers to avoid)"
       ] 
     }
   ],
-  "summary": "Quick 1-sentence verdict"
+  "summary": "Quick 1-sentence verdict considering user's values"
 }
 
 Rules:
-- Score 0-100 based on requirement match + reviews + value
+- Score 0-100 based on requirement match + user profile fit + reviews + value
+- PENALIZE products that contain things user explicitly avoids
+- BONUS for products matching user preferences (real leather, natural materials, etc.)
 - BONUS points if ChatGPT mentioned this product
 - Only products scoring 50+
 - Max 5 products
-- Be specific: cite actual features, prices, ratings`;
+- Be specific: cite actual features, prices, materials`;
 }
 
 function parseAIResponse(content: string): RankProductsResponse {

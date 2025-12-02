@@ -58,6 +58,21 @@ interface RankingResult {
 const CONTEXT_KEY = 'sift:context';           // Current session context
 const HISTORY_KEY = 'sift:researchHistory';   // Persistent research history
 const API_URL_KEY = 'sift:apiUrl';
+const USER_PROFILE_KEY = 'sift:userProfile';  // Learned user preferences
+
+// User profile - learned from all research sessions
+interface UserProfile {
+  // Core values extracted from user's research patterns
+  values: string[];           // e.g., ["health-conscious", "eco-friendly", "quality-focused"]
+  avoids: string[];           // e.g., ["plastic", "synthetic", "cheap materials"]
+  prefers: string[];          // e.g., ["natural materials", "leather", "stainless steel"]
+  priceRange: string;         // e.g., "mid-range", "premium", "budget-conscious"
+  priorities: string[];       // e.g., ["durability", "safety", "aesthetics"]
+  
+  // Metadata
+  extractedFrom: number;      // Number of research sessions analyzed
+  lastUpdated: number;
+}
 
 // Production API URL
 const DEFAULT_API_URL = 'https://sift-api.christiandcattaneo.workers.dev';
@@ -122,6 +137,12 @@ async function handleMessage(message: any, sender: chrome.runtime.MessageSender)
     case 'DELETE_HISTORY_ENTRY':
       return deleteHistoryEntry(message.id);
     
+    case 'GET_USER_PROFILE':
+      return getUserProfile();
+    
+    case 'REBUILD_USER_PROFILE':
+      return rebuildUserProfile();
+    
     default:
       console.warn('[Sift] Unknown message type:', message.type);
       return { error: 'Unknown message type' };
@@ -139,6 +160,9 @@ async function saveContext(context: ProductContext): Promise<{ success: boolean 
     
     // Also save to persistent history
     await addToResearchHistory(context);
+    
+    // Update user profile with learned preferences
+    await updateUserProfile(context);
     
     console.log('[Sift] Context saved:', context.query);
     return { success: true };
@@ -258,6 +282,241 @@ async function deleteHistoryEntry(id: string): Promise<{ success: boolean }> {
     console.error('[Sift] Failed to delete history entry:', error);
     return { success: false };
   }
+}
+
+// ============================================
+// USER PROFILE - Learn from all research
+// ============================================
+
+async function getUserProfile(): Promise<UserProfile | null> {
+  try {
+    const result = await chrome.storage.local.get(USER_PROFILE_KEY);
+    return result[USER_PROFILE_KEY] || null;
+  } catch (error) {
+    console.error('[Sift] Failed to get user profile:', error);
+    return null;
+  }
+}
+
+async function updateUserProfile(context: ProductContext): Promise<void> {
+  try {
+    const currentProfile = await getUserProfile() || createEmptyProfile();
+    const extracted = extractUserPreferences(context);
+    
+    // Merge new preferences with existing profile
+    currentProfile.values = mergeAndDedupe(currentProfile.values, extracted.values);
+    currentProfile.avoids = mergeAndDedupe(currentProfile.avoids, extracted.avoids);
+    currentProfile.prefers = mergeAndDedupe(currentProfile.prefers, extracted.prefers);
+    currentProfile.priorities = mergeAndDedupe(currentProfile.priorities, extracted.priorities);
+    
+    // Update price range if detected
+    if (extracted.priceRange && extracted.priceRange !== 'unknown') {
+      currentProfile.priceRange = extracted.priceRange;
+    }
+    
+    currentProfile.extractedFrom++;
+    currentProfile.lastUpdated = Date.now();
+    
+    // Keep lists manageable
+    currentProfile.values = currentProfile.values.slice(0, 15);
+    currentProfile.avoids = currentProfile.avoids.slice(0, 15);
+    currentProfile.prefers = currentProfile.prefers.slice(0, 15);
+    currentProfile.priorities = currentProfile.priorities.slice(0, 10);
+    
+    await chrome.storage.local.set({ [USER_PROFILE_KEY]: currentProfile });
+    console.log('[Sift] User profile updated:', currentProfile.values.slice(0, 3));
+  } catch (error) {
+    console.error('[Sift] Failed to update user profile:', error);
+  }
+}
+
+async function rebuildUserProfile(): Promise<UserProfile> {
+  const history = await getResearchHistory();
+  const profile = createEmptyProfile();
+  
+  for (const entry of history) {
+    const context: ProductContext = {
+      query: entry.query,
+      requirements: entry.requirements,
+      timestamp: entry.timestamp,
+      source: 'chatgpt',
+    };
+    
+    const extracted = extractUserPreferences(context);
+    profile.values = mergeAndDedupe(profile.values, extracted.values);
+    profile.avoids = mergeAndDedupe(profile.avoids, extracted.avoids);
+    profile.prefers = mergeAndDedupe(profile.prefers, extracted.prefers);
+    profile.priorities = mergeAndDedupe(profile.priorities, extracted.priorities);
+  }
+  
+  profile.extractedFrom = history.length;
+  profile.lastUpdated = Date.now();
+  
+  // Trim to reasonable sizes
+  profile.values = profile.values.slice(0, 15);
+  profile.avoids = profile.avoids.slice(0, 15);
+  profile.prefers = profile.prefers.slice(0, 15);
+  profile.priorities = profile.priorities.slice(0, 10);
+  
+  await chrome.storage.local.set({ [USER_PROFILE_KEY]: profile });
+  console.log('[Sift] User profile rebuilt from', history.length, 'entries');
+  
+  return profile;
+}
+
+function createEmptyProfile(): UserProfile {
+  return {
+    values: [],
+    avoids: [],
+    prefers: [],
+    priceRange: 'unknown',
+    priorities: [],
+    extractedFrom: 0,
+    lastUpdated: Date.now(),
+  };
+}
+
+function mergeAndDedupe(existing: string[], newItems: string[]): string[] {
+  const combined = [...existing, ...newItems];
+  const unique = [...new Set(combined.map(s => s.toLowerCase()))];
+  return unique;
+}
+
+// Extract user preferences and values from their research
+function extractUserPreferences(context: ProductContext): Partial<UserProfile> {
+  const text = [
+    context.query,
+    ...context.requirements,
+    ...(context.recentMessages?.map(m => m.content) || []),
+  ].join(' ').toLowerCase();
+  
+  const result: Partial<UserProfile> = {
+    values: [],
+    avoids: [],
+    prefers: [],
+    priorities: [],
+    priceRange: 'unknown',
+  };
+  
+  // ========== VALUES (what the user cares about) ==========
+  const valuePatterns: Record<string, string[]> = {
+    'health-conscious': ['health', 'healthy', 'non-toxic', 'toxin', 'safe', 'safety', 'chemical-free', 'organic', 'natural', 'bpa-free', 'lead-free', 'voc', 'off-gas', 'fumes'],
+    'eco-friendly': ['eco', 'sustainable', 'environment', 'green', 'recyclable', 'biodegradable', 'carbon', 'ethical'],
+    'quality-focused': ['quality', 'premium', 'high-end', 'best', 'top-rated', 'professional', 'commercial-grade', 'durable', 'long-lasting'],
+    'budget-conscious': ['budget', 'affordable', 'cheap', 'value', 'cost-effective', 'bang for buck', 'economical'],
+    'safety-first': ['safe', 'safety', 'secure', 'protection', 'bulletproof', 'armored', 'protective'],
+    'aesthetics-matter': ['beautiful', 'stylish', 'modern', 'design', 'aesthetic', 'look', 'appearance', 'sleek'],
+    'performance-driven': ['performance', 'powerful', 'fast', 'efficient', 'high-performance', 'speed'],
+    'comfort-priority': ['comfortable', 'comfort', 'ergonomic', 'soft', 'cushion', 'support'],
+    'minimalist': ['minimal', 'simple', 'clean', 'no clutter', 'streamlined'],
+  };
+  
+  for (const [value, keywords] of Object.entries(valuePatterns)) {
+    if (keywords.some(kw => text.includes(kw))) {
+      result.values!.push(value);
+    }
+  }
+  
+  // ========== AVOIDS (what the user doesn't want) ==========
+  const avoidPatterns = [
+    // Synthetic/Fake materials
+    { pattern: /no\s+(plastic|synthetic|fake|faux|artificial)/gi, extract: 'synthetic materials' },
+    { pattern: /without\s+(plastic|synthetic)/gi, extract: 'synthetic materials' },
+    { pattern: /avoid\s+(plastic|synthetic|fake)/gi, extract: 'synthetic materials' },
+    { pattern: /plastic[- ]?free/gi, extract: 'plastic' },
+    // Specific materials
+    { pattern: /no\s+(polyester|nylon|vinyl|pvc|pleather)/gi, extract: '$1' },
+    { pattern: /no\s+(polyurethane|pu leather|bonded leather)/gi, extract: 'fake leather' },
+    // Health concerns
+    { pattern: /no\s+(bpa|chemicals|toxins|lead|mercury|voc|formaldehyde|phthalates)/gi, extract: '$1' },
+    { pattern: /no\s+(fluoride|chlorine|pfas|pfoa)/gi, extract: '$1' },
+    // Quality concerns
+    { pattern: /no\s+(cheap|flimsy|low[- ]quality)/gi, extract: 'low quality' },
+    { pattern: /not\s+(cheap|flimsy)/gi, extract: 'low quality' },
+    // General negatives
+    { pattern: /don't want\s+([^.,]+)/gi, extract: '$1' },
+    { pattern: /hate\s+([^.,]+)/gi, extract: '$1' },
+  ];
+  
+  for (const { pattern, extract } of avoidPatterns) {
+    const matches = text.matchAll(pattern);
+    for (const match of matches) {
+      const avoided = extract.includes('$1') && match[1] 
+        ? extract.replace('$1', match[1]) 
+        : extract;
+      if (avoided.length < 30) {
+        result.avoids!.push(avoided.trim());
+      }
+    }
+  }
+  
+  // Direct "no X" extraction
+  const noMatches = text.matchAll(/\bno\s+(\w+(?:\s+\w+)?)/gi);
+  for (const match of noMatches) {
+    const item = match[1].trim();
+    if (item.length > 2 && item.length < 20 && !['more', 'less', 'problem', 'issue', 'need'].includes(item)) {
+      result.avoids!.push(item);
+    }
+  }
+  
+  // ========== PREFERS (what the user wants) ==========
+  const preferPatterns = [
+    // Materials
+    { pattern: /real\s+(leather|wood|metal|stone|marble)/gi, extract: 'real $1' },
+    { pattern: /genuine\s+(leather|wood|materials)/gi, extract: 'genuine $1' },
+    { pattern: /solid\s+(wood|metal|steel|brass)/gi, extract: 'solid $1' },
+    { pattern: /stainless\s+steel/gi, extract: 'stainless steel' },
+    { pattern: /natural\s+(materials|fibers|wood|stone|leather)/gi, extract: 'natural $1' },
+    // Quality indicators
+    { pattern: /made\s+in\s+(usa|america|japan|germany|italy)/gi, extract: 'made in $1' },
+    { pattern: /handmade|hand[- ]crafted/gi, extract: 'handmade' },
+    { pattern: /artisan|artisanal/gi, extract: 'artisan-made' },
+    // Features
+    { pattern: /with\s+(warranty|guarantee)/gi, extract: 'warranty' },
+    { pattern: /certified\s+(\w+)/gi, extract: '$1 certified' },
+  ];
+  
+  for (const { pattern, extract } of preferPatterns) {
+    const matches = text.matchAll(pattern);
+    for (const match of matches) {
+      const preferred = extract.includes('$1') && match[1]
+        ? extract.replace('$1', match[1])
+        : extract;
+      if (preferred.length < 30) {
+        result.prefers!.push(preferred.trim());
+      }
+    }
+  }
+  
+  // ========== PRIORITIES (what matters most) ==========
+  const priorityKeywords: Record<string, string[]> = {
+    'durability': ['durable', 'long-lasting', 'sturdy', 'robust', 'built to last', 'heavy duty'],
+    'safety': ['safe', 'safety', 'secure', 'protection', 'certified'],
+    'health': ['health', 'healthy', 'non-toxic', 'safe for'],
+    'value': ['value', 'worth', 'investment', 'bang for buck'],
+    'aesthetics': ['look', 'design', 'style', 'aesthetic', 'beautiful'],
+    'comfort': ['comfort', 'comfortable', 'ergonomic', 'cozy'],
+    'performance': ['performance', 'powerful', 'efficient', 'fast'],
+    'reliability': ['reliable', 'dependable', 'consistent', 'trustworthy'],
+  };
+  
+  for (const [priority, keywords] of Object.entries(priorityKeywords)) {
+    if (keywords.some(kw => text.includes(kw))) {
+      result.priorities!.push(priority);
+    }
+  }
+  
+  // ========== PRICE RANGE ==========
+  const budgetMatch = text.match(/under\s*\$?(\d+)/i) || text.match(/budget\s*(?:of\s*)?\$?(\d+)/i);
+  if (budgetMatch) {
+    const amount = parseInt(budgetMatch[1]);
+    if (amount < 100) result.priceRange = 'budget';
+    else if (amount < 500) result.priceRange = 'mid-range';
+    else if (amount < 2000) result.priceRange = 'premium';
+    else result.priceRange = 'luxury';
+  }
+  
+  return result;
 }
 
 function extractCategories(context: ProductContext): string[] {
@@ -584,6 +843,9 @@ async function rankProducts(products: ProductData[]): Promise<RankingResult | { 
   if (!context) {
     return { error: 'No context available. Research a product in ChatGPT first.' };
   }
+  
+  // Get user profile for personalized recommendations
+  const userProfile = await getUserProfile();
 
   try {
     const apiUrlResult = await chrome.storage.local.get(API_URL_KEY);
@@ -600,6 +862,14 @@ async function rankProducts(products: ProductData[]): Promise<RankingResult | { 
           recentMessages: context.recentMessages || [],
         },
         products,
+        // Include user profile for personalized recommendations
+        userProfile: userProfile ? {
+          values: userProfile.values,
+          avoids: userProfile.avoids,
+          prefers: userProfile.prefers,
+          priorities: userProfile.priorities,
+          priceRange: userProfile.priceRange,
+        } : null,
       }),
     });
 
