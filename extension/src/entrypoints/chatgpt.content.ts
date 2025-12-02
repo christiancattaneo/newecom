@@ -72,10 +72,23 @@ function initCapture() {
   const convId = getConversationId();
   context.conversationId = convId;
 
-  // 1. SCRAPE ENTIRE EXISTING CONVERSATION
-  console.log('[Sift] Scraping existing conversation...');
-  setTimeout(() => scrapeEntireConversation(), 500);
-  setTimeout(() => scrapeEntireConversation(), 2000); // Retry after page loads
+  console.log('[Sift] Initializing capture, conversation:', convId);
+
+  // 1. SCRAPE ENTIRE EXISTING CONVERSATION - multiple attempts for slow-loading pages
+  const doFullScrape = () => {
+    scrapeEntireConversation();
+    // Show indicator if we found content
+    if (context.messages.length > 0) {
+      showCaptureIndicator('prompt');
+    }
+  };
+
+  // Immediate attempt
+  doFullScrape();
+  // Retry at intervals (ChatGPT lazy-loads content)
+  setTimeout(doFullScrape, 800);
+  setTimeout(doFullScrape, 2000);
+  setTimeout(doFullScrape, 4000);
 
   // 2. WATCH FOR NEW USER PROMPTS
   watchUserPrompts();
@@ -85,6 +98,26 @@ function initCapture() {
 
   // 4. WATCH FOR URL CHANGES (switching conversations)
   watchUrlChanges();
+
+  // 5. WATCH FOR DOM READY (conversation loads after initial page)
+  waitForConversationLoad();
+}
+
+function waitForConversationLoad() {
+  // Wait for conversation container to appear
+  const observer = new MutationObserver((mutations, obs) => {
+    const hasMessages = document.querySelectorAll('[data-message-author-role]').length > 0;
+    if (hasMessages) {
+      console.log('[Sift] Conversation loaded, scraping...');
+      scrapeEntireConversation();
+      showCaptureIndicator('prompt');
+    }
+  });
+  
+  observer.observe(document.body, { childList: true, subtree: true });
+  
+  // Stop watching after 10 seconds
+  setTimeout(() => observer.disconnect(), 10000);
 }
 
 function scrapeEntireConversation() {
@@ -227,11 +260,22 @@ function watchUrlChanges() {
 function handleUrlChange() {
   const newConvId = getConversationId();
   if (newConvId !== context.conversationId) {
-    console.log('[Sift] Conversation changed, scraping new conversation');
+    console.log('[Sift] Conversation changed to:', newConvId);
     context = createEmptyContext();
     context.conversationId = newConvId;
     lastAiContent = '';
-    setTimeout(() => scrapeEntireConversation(), 1000);
+    
+    // Scrape new conversation with multiple attempts
+    const scrapeAndShow = () => {
+      scrapeEntireConversation();
+      if (context.messages.length > 0) {
+        showCaptureIndicator('prompt');
+      }
+    };
+    
+    setTimeout(scrapeAndShow, 500);
+    setTimeout(scrapeAndShow, 1500);
+    setTimeout(scrapeAndShow, 3000);
   }
 }
 
@@ -377,17 +421,12 @@ function extractContextFromMessages() {
 function extractTrackedLinks() {
   const links: ConversationContext['trackedLinks'] = [];
   
-  // Find all links in AI responses - ChatGPT uses citation pills
+  // Find ALL external links in AI responses
+  // 1. Citation pills (the main link buttons ChatGPT shows)
+  // 2. Any anchor tags with external hrefs
   const linkElements = document.querySelectorAll(
-    '[data-message-author-role="assistant"] a[href*="amazon.com"], ' +
-    '[data-message-author-role="assistant"] a[href*="homedepot.com"], ' +
-    '[data-message-author-role="assistant"] a[href*="bestbuy.com"], ' +
-    '[data-message-author-role="assistant"] a[href*="walmart.com"], ' +
-    '[data-message-author-role="assistant"] a[href*="target.com"], ' +
-    '[data-message-author-role="assistant"] a[href*="ebay.com"], ' +
-    '[data-message-author-role="assistant"] a[href*="newegg.com"], ' +
-    '[data-message-author-role="assistant"] a[href*="supplyhouse.com"], ' +
-    '[data-message-author-role="assistant"] [data-testid="webpage-citation-pill"] a'
+    '[data-message-author-role="assistant"] a[href^="http"], ' +
+    '[data-testid="webpage-citation-pill"] a[href^="http"]'
   );
 
   linkElements.forEach(el => {
@@ -396,20 +435,36 @@ function extractTrackedLinks() {
     
     try {
       const url = new URL(href);
+      
+      // Skip ChatGPT internal links and chatgpt.com tracking params
+      if (url.hostname.includes('chatgpt.com') || 
+          url.hostname.includes('openai.com') ||
+          url.hostname.includes('google.com/search')) {
+        return;
+      }
+      
       const domain = url.hostname.replace('www.', '');
       const text = el.textContent?.trim() || domain;
       
-      // Avoid duplicates
-      if (!links.find(l => l.url === href)) {
-        links.push({ url: href, domain, text });
+      // Clean URL (remove utm tracking params for cleaner matching)
+      url.searchParams.delete('utm_source');
+      url.searchParams.delete('utm_medium');
+      url.searchParams.delete('utm_campaign');
+      const cleanUrl = url.toString();
+      
+      // Avoid duplicates (by domain + path, not full URL with params)
+      const urlKey = domain + url.pathname;
+      if (!links.find(l => (l.domain + new URL(l.url).pathname) === urlKey)) {
+        links.push({ url: cleanUrl, domain, text });
+        console.log('[Sift] Found link:', domain, url.pathname.slice(0, 50));
       }
     } catch {}
   });
 
-  context.trackedLinks = links.slice(0, 20);
+  context.trackedLinks = links.slice(0, 30);
   
   if (links.length > 0) {
-    console.log('[Sift] Tracked links from ChatGPT:', links.length);
+    console.log('[Sift] Total tracked links:', links.length, links.map(l => l.domain).join(', '));
   }
 }
 
