@@ -39,6 +39,74 @@ header .tagline {
   color: #888;
 }
 
+/* Live Page Status Bar */
+.page-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  background: #0d1420;
+  border-bottom: 1px solid #2a2a4a;
+  font-size: 11px;
+  transition: all 0.3s;
+}
+
+.page-status-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.page-indicator {
+  font-size: 8px;
+  color: #666;
+  animation: pulse 2s infinite;
+}
+
+.page-indicator.chatgpt {
+  color: #10b981;
+}
+
+.page-indicator.shopping {
+  color: #f59e0b;
+}
+
+.page-indicator.active {
+  color: #10b981;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.page-domain {
+  color: #888;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+.page-status-text {
+  color: #666;
+  white-space: nowrap;
+  font-size: 10px;
+}
+
+.page-status-text.chatgpt {
+  color: #10b981;
+}
+
+.page-status-text.shopping {
+  color: #f59e0b;
+}
+
+.page-status-text.ready {
+  color: #10b981;
+}
+
 /* Tab Navigation */
 .tabs {
   display: flex;

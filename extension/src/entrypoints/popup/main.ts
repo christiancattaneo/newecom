@@ -1,6 +1,7 @@
 /**
  * Popup Main Script
  * Shows accumulated context and research history
+ * REACTIVE to all browsing activity
  */
 
 interface ProductContext {
@@ -25,6 +26,20 @@ interface ResearchEntry {
   lastUsed: number;
   conversationId?: string;
 }
+
+interface CurrentPageInfo {
+  url: string;
+  title: string;
+  domain: string;
+  isChatGPT: boolean;
+  isShopping: boolean;
+}
+
+// DOM Elements - Page Status Bar
+const pageStatusBar = document.getElementById('page-status-bar')!;
+const pageIndicator = document.getElementById('page-indicator')!;
+const pageDomain = document.getElementById('page-domain')!;
+const pageStatusText = document.getElementById('page-status-text')!;
 
 // DOM Elements
 const statusIndicator = document.getElementById('status-indicator')!;
@@ -59,21 +74,141 @@ let knownHistoryIds: Set<string> = new Set();
 let currentShopContext: ProductContext | null = null;
 let currentShopProductName: string = '';
 
+// Current page tracking
+let currentPageInfo: CurrentPageInfo | null = null;
+let lastTabId: number | null = null;
+
 // Tab elements
 const tabs = document.querySelectorAll('.tab');
 const tabContents = document.querySelectorAll('.tab-content');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
+  await loadCurrentPage();
   await loadContext();
   await loadHistory();
   setupEventListeners();
   setupTabs();
   setupStorageListener();
+  setupTabListener();
   
-  // Refresh current context every 2 seconds
-  setInterval(loadContext, 2000);
+  // Fast refresh cycle - every 500ms for responsiveness
+  setInterval(refreshAll, 500);
 });
+
+// ========================================
+// REACTIVE BROWSING TRACKING
+// ========================================
+
+async function refreshAll() {
+  await loadCurrentPage();
+  await loadContext();
+}
+
+async function loadCurrentPage() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.url) return;
+    
+    // Skip if same tab and URL
+    if (lastTabId === tab.id && currentPageInfo?.url === tab.url) return;
+    lastTabId = tab.id ?? null;
+    
+    const url = new URL(tab.url);
+    currentPageInfo = {
+      url: tab.url,
+      title: tab.title || '',
+      domain: url.hostname.replace('www.', ''),
+      isChatGPT: url.hostname.includes('chatgpt.com') || url.hostname.includes('openai.com'),
+      isShopping: isShoppingSite(url.hostname),
+    };
+    
+    updatePageStatus();
+  } catch (e) {
+    // Tab might not be accessible (e.g., chrome:// pages)
+  }
+}
+
+function isShoppingSite(hostname: string): boolean {
+  const shoppingSites = [
+    'amazon', 'bestbuy', 'target', 'walmart', 'homedepot', 'lowes',
+    'newegg', 'ebay', 'wayfair', 'costco', 'macys', 'nordstrom',
+    'zappos', 'bhphotovideo', 'adorama', 'overstock', 'chewy', 'etsy',
+    'shop', 'store', 'buy', 'cart', 'checkout'
+  ];
+  const h = hostname.toLowerCase();
+  return shoppingSites.some(s => h.includes(s));
+}
+
+function updatePageStatus() {
+  if (!currentPageInfo) {
+    pageDomain.textContent = '-';
+    pageStatusText.textContent = 'No active tab';
+    return;
+  }
+  
+  // Update page domain
+  pageDomain.textContent = currentPageInfo.domain || '-';
+  
+  // Update page indicator and status text based on current page
+  pageIndicator.className = 'page-indicator';
+  pageStatusText.className = 'page-status-text';
+  
+  if (currentPageInfo.isChatGPT) {
+    pageIndicator.classList.add('chatgpt');
+    pageStatusText.classList.add('chatgpt');
+    pageStatusText.textContent = '🔍 Capturing context...';
+    
+    statusIndicator.classList.remove('inactive', 'shopping');
+    statusIndicator.classList.add('active', 'chatgpt');
+    statusText.textContent = '🔍 Watching ChatGPT';
+  } else if (currentPageInfo.isShopping) {
+    pageIndicator.classList.add('shopping');
+    pageStatusText.classList.add('shopping');
+    pageStatusText.textContent = currentShopContext ? '🛒 Analyzing...' : '🛒 Shopping site';
+    
+    statusIndicator.classList.remove('inactive', 'chatgpt');
+    statusIndicator.classList.add('active', 'shopping');
+    statusText.textContent = '🛒 Shopping site detected';
+  } else {
+    // Check if we have context
+    if (currentShopContext) {
+      pageIndicator.classList.add('active');
+      pageStatusText.classList.add('ready');
+      pageStatusText.textContent = '✓ Ready to shop';
+      
+      statusIndicator.classList.remove('inactive', 'chatgpt', 'shopping');
+      statusIndicator.classList.add('active');
+      statusText.textContent = '✓ Context ready';
+    } else {
+      pageStatusText.textContent = 'Browsing...';
+      
+      statusIndicator.classList.remove('active', 'chatgpt', 'shopping');
+      statusIndicator.classList.add('inactive');
+      statusText.textContent = 'Browse to shop or research';
+    }
+  }
+}
+
+// Listen for tab changes
+function setupTabListener() {
+  // Tab activated
+  chrome.tabs.onActivated.addListener(async () => {
+    await loadCurrentPage();
+    await loadContext();
+  });
+  
+  // Tab updated (URL change, page load)
+  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+    if (changeInfo.status === 'complete' || changeInfo.url) {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (activeTab && activeTab.id === tabId) {
+        await loadCurrentPage();
+        await loadContext();
+      }
+    }
+  });
+}
 
 // Listen for storage changes to update history in real-time
 function setupStorageListener() {
@@ -127,10 +262,15 @@ async function loadContext() {
     const result = await browser.runtime.sendMessage({ type: 'CHECK_CONTEXT_EXISTS' });
     
     if (result?.exists && result.context) {
+      currentShopContext = result.context;
       showContext(result.context);
     } else {
+      currentShopContext = null;
       showNoContext();
     }
+    
+    // Update page status with new context info
+    updatePageStatus();
   } catch (error) {
     console.error('[Sift Popup] Failed to load context:', error);
     showNoContext();
