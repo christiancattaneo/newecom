@@ -65,6 +65,21 @@ interface ProductContext {
 let overlayElement: HTMLElement | null = null;
 let isAnalyzing = false;
 
+// Cache for scraped products (avoids re-scraping same DOM)
+let cachedProducts: ProductData[] | null = null;
+let cacheTime = 0;
+const PRODUCT_CACHE_TTL = 2000; // 2 seconds
+
+function getCachedOrScrapeProducts(): ProductData[] {
+  const now = Date.now();
+  if (cachedProducts && (now - cacheTime) < PRODUCT_CACHE_TTL) {
+    return cachedProducts;
+  }
+  cachedProducts = scrapeProducts();
+  cacheTime = now;
+  return cachedProducts;
+}
+
 async function initShoppingAssistant() {
   console.log('[Sift] Initializing shopping assistant on:', window.location.href);
   
@@ -88,6 +103,12 @@ async function initShoppingAssistant() {
     matchScore?: number;
     isHistoricalMatch?: boolean;
   }, _sender, sendResponse) => {
+    // PING handler for ready check (fast path)
+    if (message.type === 'PING') {
+      sendResponse({ ready: true });
+      return true;
+    }
+    
     console.log('[Sift] Received message:', message.type);
     
     // Handle scrape request from popup
@@ -129,44 +150,87 @@ function waitForProductsAndAnalyze(context: ProductContext, matchInfo?: MatchInf
   const singleProduct = scrapeSingleProductPage();
   
   if (singleProduct) {
-    // This is a single product page - show quick view, not full analysis
     console.log('[Sift] Single product page detected:', singleProduct.title.slice(0, 40));
     showSingleProductView(singleProduct, context, matchInfo);
     return;
   }
   
-  // Multi-product page: wait for listings to load
-  let attempts = 0;
-  const maxAttempts = 10;
+  // Immediate check for products (uses cache)
+  const immediateProducts = getCachedOrScrapeProducts();
+  if (immediateProducts.length > 1) {
+    console.log('[Sift] Products found immediately, analyzing...');
+    analyzeCurrentPage(context, matchInfo);
+    return;
+  } else if (immediateProducts.length === 1) {
+    console.log('[Sift] Single product found, showing quick view');
+    showSingleProductView(immediateProducts[0], context, matchInfo);
+    return;
+  }
   
-  const checkForProducts = () => {
-    attempts++;
-    const products = scrapeProducts();
+  // Use MutationObserver instead of polling
+  console.log('[Sift] Waiting for products via MutationObserver...');
+  let resolved = false;
+  const startTime = Date.now();
+  const maxWaitTime = 5000; // 5 seconds max (was 8 seconds with polling)
+  
+  const observer = new MutationObserver(() => {
+    if (resolved) return;
     
+    // Check timeout
+    if (Date.now() - startTime > maxWaitTime) {
+      cleanup();
+      handleNoProducts(context, matchInfo);
+      return;
+    }
+    
+    // Invalidate cache on mutation, then check
+    cachedProducts = null;
+    const products = getCachedOrScrapeProducts();
     if (products.length > 1) {
-      console.log('[Sift] Multiple products found, analyzing...');
+      cleanup();
+      console.log('[Sift] Products detected via observer, analyzing...');
       analyzeCurrentPage(context, matchInfo);
     } else if (products.length === 1) {
-      // Only one product found - treat as single product page
-      console.log('[Sift] Only one product found, showing quick view');
+      cleanup();
+      console.log('[Sift] Single product detected via observer');
       showSingleProductView(products[0], context, matchInfo);
-    } else if (attempts < maxAttempts) {
-      console.log(`[Sift] Waiting for products... attempt ${attempts}/${maxAttempts}`);
-      setTimeout(checkForProducts, 800);
-    } else {
-      // Check one more time for single product
-      const lastCheck = scrapeSingleProductPage();
-      if (lastCheck) {
-        showSingleProductView(lastCheck, context, matchInfo);
-      } else {
-        console.log('[Sift] No products found after waiting');
-        showOverlay({ error: 'No products found. Try searching for a product.', context, matchInfo });
-      }
     }
+  });
+  
+  const cleanup = () => {
+    resolved = true;
+    observer.disconnect();
   };
   
-  // Start checking after initial delay
-  setTimeout(checkForProducts, 800);
+  // Observe main content area
+  const target = document.querySelector('main') || document.body;
+  observer.observe(target, { childList: true, subtree: true });
+  
+  // Fallback timeout (in case no mutations occur)
+  setTimeout(() => {
+    if (resolved) return;
+    cleanup();
+    
+    // Final check
+    const products = scrapeProducts();
+    if (products.length > 1) {
+      analyzeCurrentPage(context, matchInfo);
+    } else if (products.length === 1) {
+      showSingleProductView(products[0], context, matchInfo);
+    } else {
+      handleNoProducts(context, matchInfo);
+    }
+  }, maxWaitTime);
+}
+
+function handleNoProducts(context: ProductContext, matchInfo?: MatchInfo) {
+  const lastCheck = scrapeSingleProductPage();
+  if (lastCheck) {
+    showSingleProductView(lastCheck, context, matchInfo);
+  } else {
+    console.log('[Sift] No products found');
+    showOverlay({ error: 'No products found. Try searching for a product.', context, matchInfo });
+  }
 }
 
 // Show a simple view for single product pages (not the full analysis)

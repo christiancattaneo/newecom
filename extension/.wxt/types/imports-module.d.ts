@@ -17,4 +17,5 @@ declare module '#imports' {
   export { injectScript, ScriptPublicPath, InjectScriptOptions } from 'wxt/utils/inject-script';
   export { InvalidMatchPattern, MatchPattern } from 'wxt/utils/match-patterns';
   export { fakeBrowser } from 'wxt/testing';
+  export { SHOPPING_DOMAINS, SHOPPING_URL_PATTERNS, SKIP_PATTERNS, isDefinitelyNotShopping, isLikelyShoppingSite, extractDomain } from '../src/utils/siteDetection';
 }

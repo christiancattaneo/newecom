@@ -20,6 +20,9 @@ const globals = {
   "InvalidMatchPattern": true,
   "MatchPattern": true,
   "MigrationError": true,
+  "SHOPPING_DOMAINS": true,
+  "SHOPPING_URL_PATTERNS": true,
+  "SKIP_PATTERNS": true,
   "ScriptPublicPath": true,
   "ShadowRootContentScriptUi": true,
   "ShadowRootContentScriptUiOptions": true,
@@ -40,8 +43,11 @@ const globals = {
   "defineContentScript": true,
   "defineUnlistedScript": true,
   "defineWxtPlugin": true,
+  "extractDomain": true,
   "fakeBrowser": true,
   "injectScript": true,
+  "isDefinitelyNotShopping": true,
+  "isLikelyShoppingSite": true,
   "storage": true,
   "useAppConfig": true
 }

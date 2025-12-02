@@ -4,6 +4,9 @@ declare global {
   const ContentScriptContext: typeof import('wxt/utils/content-script-context').ContentScriptContext
   const InvalidMatchPattern: typeof import('wxt/utils/match-patterns').InvalidMatchPattern
   const MatchPattern: typeof import('wxt/utils/match-patterns').MatchPattern
+  const SHOPPING_DOMAINS: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/siteDetection').SHOPPING_DOMAINS
+  const SHOPPING_URL_PATTERNS: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/siteDetection').SHOPPING_URL_PATTERNS
+  const SKIP_PATTERNS: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/siteDetection').SKIP_PATTERNS
   const browser: typeof import('wxt/browser').browser
   const createIframeUi: typeof import('wxt/utils/content-script-ui/iframe').createIframeUi
   const createIntegratedUi: typeof import('wxt/utils/content-script-ui/integrated').createIntegratedUi
@@ -13,8 +16,11 @@ declare global {
   const defineContentScript: typeof import('wxt/utils/define-content-script').defineContentScript
   const defineUnlistedScript: typeof import('wxt/utils/define-unlisted-script').defineUnlistedScript
   const defineWxtPlugin: typeof import('wxt/utils/define-wxt-plugin').defineWxtPlugin
+  const extractDomain: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/siteDetection').extractDomain
   const fakeBrowser: typeof import('wxt/testing').fakeBrowser
   const injectScript: typeof import('wxt/utils/inject-script').injectScript
+  const isDefinitelyNotShopping: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/siteDetection').isDefinitelyNotShopping
+  const isLikelyShoppingSite: typeof import('/Users/christiancattaneo/Projects/newecom/extension/src/utils/siteDetection').isLikelyShoppingSite
   const storage: typeof import('wxt/utils/storage').storage
   const useAppConfig: typeof import('wxt/utils/app-config').useAppConfig
 }

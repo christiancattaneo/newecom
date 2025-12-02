@@ -4,6 +4,8 @@
  * REACTIVE to all browsing activity
  */
 
+import { isLikelyShoppingSite } from '../../utils/siteDetection';
+
 interface ProductContext {
   query: string;
   requirements: string[];
@@ -67,8 +69,9 @@ const shopProductName = document.getElementById('shop-product-name')!;
 const shopRequirements = document.getElementById('shop-requirements')!;
 const noShopContext = document.getElementById('no-shop-context')!;
 
-// Track known history IDs for highlighting new entries
+// Track known history for differential rendering
 let knownHistoryIds: Set<string> = new Set();
+let lastHistoryHash = ''; // Track if history actually changed
 
 // Current shop context
 let currentShopContext: ProductContext | null = null;
@@ -119,7 +122,7 @@ async function loadCurrentPage() {
       title: tab.title || '',
       domain: url.hostname.replace('www.', ''),
       isChatGPT: url.hostname.includes('chatgpt.com') || url.hostname.includes('openai.com'),
-      isShopping: isShoppingSite(url.hostname),
+      isShopping: isLikelyShoppingSite(url.hostname),
     };
     
     updatePageStatus();
@@ -128,16 +131,7 @@ async function loadCurrentPage() {
   }
 }
 
-function isShoppingSite(hostname: string): boolean {
-  const shoppingSites = [
-    'amazon', 'bestbuy', 'target', 'walmart', 'homedepot', 'lowes',
-    'newegg', 'ebay', 'wayfair', 'costco', 'macys', 'nordstrom',
-    'zappos', 'bhphotovideo', 'adorama', 'overstock', 'chewy', 'etsy',
-    'shop', 'store', 'buy', 'cart', 'checkout'
-  ];
-  const h = hostname.toLowerCase();
-  return shoppingSites.some(s => h.includes(s));
-}
+// Using shared isLikelyShoppingSite from utils/siteDetection
 
 function updatePageStatus() {
   if (!currentPageInfo) {
@@ -191,21 +185,27 @@ function updatePageStatus() {
 
 // Listen for tab changes
 function setupTabListener() {
-  // Tab activated
-  chrome.tabs.onActivated.addListener(async () => {
-    await loadCurrentPage();
-    await loadContext();
+  // Tab activated - only for current window
+  chrome.tabs.onActivated.addListener(async (activeInfo) => {
+    // Check if this is the current window
+    const currentWindow = await chrome.windows.getCurrent();
+    if (activeInfo.windowId === currentWindow.id) {
+      await loadCurrentPage();
+      await loadContext();
+    }
   });
   
-  // Tab updated (URL change, page load)
-  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
-    if (changeInfo.status === 'complete' || changeInfo.url) {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (activeTab && activeTab.id === tabId) {
-        await loadCurrentPage();
-        await loadContext();
-      }
-    }
+  // Tab updated (URL change, page load) - only for active tab in current window
+  chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    // Early exit for irrelevant changes
+    if (!changeInfo.status && !changeInfo.url) return;
+    if (!tab.active) return; // Not the active tab
+    
+    const currentWindow = await chrome.windows.getCurrent();
+    if (tab.windowId !== currentWindow.id) return; // Not current window
+    
+    await loadCurrentPage();
+    await loadContext();
   });
 }
 
@@ -306,42 +306,49 @@ async function loadHistory() {
 }
 
 function renderHistory(history: ResearchEntry[]) {
+  // Quick hash to check if anything changed
+  const historyHash = history.map(h => `${h.id}:${h.lastUsed}`).join('|');
+  if (historyHash === lastHistoryHash) {
+    // Only update time displays (cheap operation)
+    updateHistoryTimes(history);
+    return;
+  }
+  lastHistoryHash = historyHash;
+  
   // Find new entries (not in our known set)
   const newIds = new Set(history.map(h => h.id).filter(id => !knownHistoryIds.has(id)));
+  const existingIds = new Set(Array.from(historyList.querySelectorAll('.history-item')).map(el => el.getAttribute('data-id')));
   
-  historyList.innerHTML = history.map((entry, index) => {
-    const date = new Date(entry.timestamp);
-    const timeAgo = getTimeAgo(entry.timestamp);
-    const categories = entry.categories.slice(0, 3).map(c => 
-      `<span class="category-tag">${c}</span>`
-    ).join('');
-    const requirements = entry.requirements.slice(0, 3).map(r => 
-      `<span class="req-tag">${r}</span>`
-    ).join('');
-    
-    // Add 'new' class for newly added entries
+  // Differential update: only modify what changed
+  history.forEach((entry, index) => {
+    const existingEl = historyList.querySelector(`[data-id="${entry.id}"]`) as HTMLElement;
     const isNew = newIds.has(entry.id);
     
-    // Use productName if available, fallback to cleaned query
-    const displayName = entry.productName || entry.query.slice(0, 40);
-    
-    return `
-      <div class="history-item${isNew ? ' new' : ''}" data-index="${index}" data-id="${entry.id}">
-        ${isNew ? '<span class="new-badge">NEW</span>' : ''}
-        <div class="history-header">
-          <span class="history-name">${displayName}</span>
-          <span class="history-time" title="${date.toLocaleString()}">${timeAgo}</span>
-        </div>
-        <div class="history-categories">${categories}</div>
-        <div class="history-requirements">${requirements || '<span class="no-reqs">No requirements</span>'}</div>
-        <div class="history-actions">
-          <button class="btn-use" data-id="${entry.id}">Set Current</button>
-          <button class="btn-shop" data-id="${entry.id}">🛒 Shop</button>
-          <button class="btn-delete" data-id="${entry.id}">×</button>
-        </div>
-      </div>
-    `;
-  }).join('');
+    if (existingEl && !isNew) {
+      // Update existing element in place (just update time)
+      const timeEl = existingEl.querySelector('.history-time');
+      if (timeEl) timeEl.textContent = getTimeAgo(entry.timestamp);
+      // Update position if needed
+      if (existingEl !== historyList.children[index]) {
+        historyList.insertBefore(existingEl, historyList.children[index]);
+      }
+    } else {
+      // Create new element
+      const newEl = createHistoryElement(entry, index, isNew);
+      if (historyList.children[index]) {
+        historyList.insertBefore(newEl, historyList.children[index]);
+      } else {
+        historyList.appendChild(newEl);
+      }
+    }
+  });
+  
+  // Remove deleted entries
+  existingIds.forEach(id => {
+    if (!history.find(h => h.id === id)) {
+      historyList.querySelector(`[data-id="${id}"]`)?.remove();
+    }
+  });
   
   // Update known IDs
   knownHistoryIds = new Set(history.map(h => h.id));
@@ -351,32 +358,53 @@ function renderHistory(history: ResearchEntry[]) {
     historyList.querySelectorAll('.history-item.new').forEach(el => {
       el.classList.remove('new');
     });
-    historyList.querySelectorAll('.new-badge').forEach(el => {
-      el.remove();
-    });
+    historyList.querySelectorAll('.new-badge').forEach(el => el.remove());
   }, 3000);
-  
-  // Add event listeners for buttons
-  historyList.querySelectorAll('.btn-use').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const id = (e.target as HTMLElement).getAttribute('data-id');
-      await useHistoryEntry(id!);
-    });
+}
+
+function updateHistoryTimes(history: ResearchEntry[]) {
+  history.forEach(entry => {
+    const el = historyList.querySelector(`[data-id="${entry.id}"] .history-time`);
+    if (el) el.textContent = getTimeAgo(entry.timestamp);
   });
+}
+
+function createHistoryElement(entry: ResearchEntry, index: number, isNew: boolean): HTMLElement {
+  const date = new Date(entry.timestamp);
+  const timeAgo = getTimeAgo(entry.timestamp);
+  const categories = entry.categories.slice(0, 3).map(c => 
+    `<span class="category-tag">${c}</span>`
+  ).join('');
+  const requirements = entry.requirements.slice(0, 3).map(r => 
+    `<span class="req-tag">${r}</span>`
+  ).join('');
+  const displayName = entry.productName || entry.query.slice(0, 40);
   
-  historyList.querySelectorAll('.btn-shop').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const id = (e.target as HTMLElement).getAttribute('data-id');
-      await shopHistoryEntry(id!);
-    });
-  });
+  const div = document.createElement('div');
+  div.className = `history-item${isNew ? ' new' : ''}`;
+  div.setAttribute('data-index', String(index));
+  div.setAttribute('data-id', entry.id);
+  div.innerHTML = `
+    ${isNew ? '<span class="new-badge">NEW</span>' : ''}
+    <div class="history-header">
+      <span class="history-name">${displayName}</span>
+      <span class="history-time" title="${date.toLocaleString()}">${timeAgo}</span>
+    </div>
+    <div class="history-categories">${categories}</div>
+    <div class="history-requirements">${requirements || '<span class="no-reqs">No requirements</span>'}</div>
+    <div class="history-actions">
+      <button class="btn-use" data-id="${entry.id}">Set Current</button>
+      <button class="btn-shop" data-id="${entry.id}">🛒 Shop</button>
+      <button class="btn-delete" data-id="${entry.id}">×</button>
+    </div>
+  `;
   
-  historyList.querySelectorAll('.btn-delete').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const id = (e.target as HTMLElement).getAttribute('data-id');
-      await deleteHistoryEntry(id!);
-    });
-  });
+  // Add event listeners directly to this element
+  div.querySelector('.btn-use')?.addEventListener('click', () => useHistoryEntry(entry.id));
+  div.querySelector('.btn-shop')?.addEventListener('click', () => shopHistoryEntry(entry.id));
+  div.querySelector('.btn-delete')?.addEventListener('click', () => deleteHistoryEntry(entry.id));
+  
+  return div;
 }
 
 async function shopHistoryEntry(id: string) {

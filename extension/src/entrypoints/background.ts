@@ -4,6 +4,8 @@
  * Manages persistent research history for intelligent matching
  */
 
+import { isDefinitelyNotShopping, extractDomain } from '../utils/siteDetection';
+
 // Types
 interface ProductContext {
   query: string;
@@ -108,6 +110,11 @@ const injectedTabs = new Set<number>();
 let profileUpdateTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingProfileContext: ProductContext | null = null;
 const PROFILE_UPDATE_DELAY = 2000; // 2 seconds debounce
+
+// Debounce history writes
+let historyWriteTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingHistoryWrite: ResearchEntry[] | null = null;
+const HISTORY_WRITE_DELAY = 1000; // 1 second debounce
 
 // Product categories for intelligent matching
 const PRODUCT_CATEGORIES: Record<string, string[]> = {
@@ -284,12 +291,32 @@ async function addToResearchHistory(context: ProductContext): Promise<void> {
     // Keep only last 50 entries
     const trimmedHistory = history.slice(0, 50);
     
-    await chrome.storage.local.set({ [HISTORY_KEY]: trimmedHistory });
-    invalidateHistoryCache(); // Clear cache on write
-    console.log('[Sift] Research history updated:', categories.join(', '));
+    // Debounced write to avoid rapid storage operations
+    scheduleHistoryWrite(trimmedHistory);
+    console.log('[Sift] Research history queued for update:', categories.join(', '));
   } catch (error) {
     console.error('[Sift] Failed to save to history:', error);
   }
+}
+
+// Debounced history write
+function scheduleHistoryWrite(history: ResearchEntry[]) {
+  pendingHistoryWrite = history;
+  // Update cache immediately for reads
+  historyCache = history;
+  historyCacheTime = Date.now();
+  
+  if (historyWriteTimer) {
+    clearTimeout(historyWriteTimer);
+  }
+  
+  historyWriteTimer = setTimeout(async () => {
+    if (pendingHistoryWrite) {
+      await chrome.storage.local.set({ [HISTORY_KEY]: pendingHistoryWrite });
+      console.log('[Sift] History written to storage');
+      pendingHistoryWrite = null;
+    }
+  }, HISTORY_WRITE_DELAY);
 }
 
 async function getResearchHistory(): Promise<ResearchEntry[]> {
@@ -600,18 +627,22 @@ function extractUserPreferences(context: ProductContext): Partial<UserProfile> {
   return result;
 }
 
+// Pre-computed stop words Set for O(1) lookup
+const STOP_WORDS = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'are', 'was', 'were', 'been', 'being', 'best', 'good', 'great', 'need', 'want', 'looking']);
+
 function extractCategories(context: ProductContext): string[] {
-  const text = [
-    context.query,
-    ...context.requirements,
-    ...(context.mentionedProducts || []),
-  ].join(' ').toLowerCase();
+  // Build text once, reuse for both functions
+  const text = buildContextText(context);
   
   const matches: string[] = [];
   
+  // Use for...of with early break when category found
   for (const [category, keywords] of Object.entries(PRODUCT_CATEGORIES)) {
-    if (keywords.some(kw => text.includes(kw))) {
-      matches.push(category);
+    for (const kw of keywords) {
+      if (text.includes(kw)) {
+        matches.push(category);
+        break; // Found match, no need to check more keywords
+      }
     }
   }
   
@@ -619,18 +650,33 @@ function extractCategories(context: ProductContext): string[] {
 }
 
 function extractKeywords(context: ProductContext): string[] {
-  const text = [
+  const text = buildContextText(context);
+  
+  // Single pass: extract words and dedupe in one loop
+  const seen = new Set<string>();
+  const keywords: string[] = [];
+  
+  // Use exec loop instead of match + filter + Set
+  const regex = /\b[a-z]{3,}\b/g;
+  let match;
+  while ((match = regex.exec(text)) !== null && keywords.length < 20) {
+    const word = match[0];
+    if (!STOP_WORDS.has(word) && !seen.has(word)) {
+      seen.add(word);
+      keywords.push(word);
+    }
+  }
+  
+  return keywords;
+}
+
+// Shared text builder to avoid duplicate concatenation
+function buildContextText(context: ProductContext): string {
+  return [
     context.query,
     ...context.requirements,
+    ...(context.mentionedProducts || []),
   ].join(' ').toLowerCase();
-  
-  // Extract significant words (3+ chars, not common words)
-  const stopWords = ['the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'are', 'was', 'were', 'been', 'being', 'best', 'good', 'great', 'need', 'want', 'looking'];
-  const words = text.match(/\b[a-z]{3,}\b/g) || [];
-  const keywords = words.filter(w => !stopWords.includes(w));
-  
-  // Return unique keywords
-  return [...new Set(keywords)].slice(0, 20);
 }
 
 function extractProductName(query: string): string {
@@ -692,31 +738,16 @@ async function analyzeSiteWithAI(pageInfo: {
     return { matched: false, matchScore: 0 };
   }
   
-  // Skip obvious non-shopping pages
-  const skipPatterns = [
-    /google\.(com|[a-z]{2})\/search/i,
-    /youtube\.com/i,
-    /facebook\.com/i,
-    /twitter\.com|x\.com/i,
-    /instagram\.com/i,
-    /reddit\.com/i,
-    /wikipedia\.org/i,
-    /chatgpt\.com|openai\.com/i,
-    /github\.com/i,
-    /linkedin\.com/i,
-  ];
-  
-  if (skipPatterns.some(p => p.test(pageInfo.url))) {
+  // Skip obvious non-shopping pages (using shared module)
+  if (isDefinitelyNotShopping(pageInfo.url)) {
     console.log('[Sift] Skipping non-shopping site:', pageInfo.url);
     return { matched: false, matchScore: 0 };
   }
   
   // ===== CACHE CHECK =====
   // Use domain as cache key (ignore path for shopping site detection)
-  let domain: string;
-  try {
-    domain = new URL(pageInfo.url).hostname.replace('www.', '');
-  } catch {
+  const domain = extractDomain(pageInfo.url);
+  if (!domain) {
     return { matched: false, matchScore: 0 };
   }
   
@@ -950,20 +981,47 @@ async function injectAndNotify(tabId: number, context: ProductContext, isTracked
 }
 
 async function notifyTabWithContext(tabId: number, context: ProductContext, isTrackedLink: boolean, matchScore?: number) {
-  for (let i = 0; i < 5; i++) {
+  // Exponential backoff: 100ms, 200ms, 400ms (total max ~700ms vs 2500ms before)
+  const delays = [100, 200, 400];
+  
+  for (let i = 0; i < delays.length; i++) {
     try {
-      await browser.tabs.sendMessage(tabId, { 
-        type: 'CONTEXT_AVAILABLE',
-        context,
-        isTrackedLink,
-        matchScore,
-        isHistoricalMatch: !isTrackedLink && matchScore !== undefined,
-      });
-      console.log('[Sift] Notified tab successfully');
-      return;
+      // First ping to check if script is ready
+      const ready = await browser.tabs.sendMessage(tabId, { type: 'PING' }).catch(() => null);
+      
+      if (ready) {
+        // Script is ready, send the actual message
+        await browser.tabs.sendMessage(tabId, { 
+          type: 'CONTEXT_AVAILABLE',
+          context,
+          isTrackedLink,
+          matchScore,
+          isHistoricalMatch: !isTrackedLink && matchScore !== undefined,
+        });
+        console.log('[Sift] Notified tab successfully on attempt', i + 1);
+        return;
+      }
     } catch {
-      await new Promise(r => setTimeout(r, 500));
+      // Script not ready yet
     }
+    
+    if (i < delays.length - 1) {
+      await new Promise(r => setTimeout(r, delays[i]));
+    }
+  }
+  
+  // Final attempt without ping check
+  try {
+    await browser.tabs.sendMessage(tabId, { 
+      type: 'CONTEXT_AVAILABLE',
+      context,
+      isTrackedLink,
+      matchScore,
+      isHistoricalMatch: !isTrackedLink && matchScore !== undefined,
+    });
+    console.log('[Sift] Notified tab on final attempt');
+  } catch {
+    console.log('[Sift] Failed to notify tab after all retries');
   }
 }
 
