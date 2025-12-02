@@ -4,30 +4,8 @@
  */
 
 export default defineContentScript({
-  matches: [
-    // Common shopping sites (auto-inject)
-    'https://*.amazon.com/*',
-    'https://*.amazon.co.uk/*',
-    'https://*.bestbuy.com/*',
-    'https://*.target.com/*',
-    'https://*.walmart.com/*',
-    'https://*.homedepot.com/*',
-    'https://*.lowes.com/*',
-    'https://*.newegg.com/*',
-    'https://*.ebay.com/*',
-    'https://*.ebay.co.uk/*',
-    'https://*.wayfair.com/*',
-    'https://*.costco.com/*',
-    'https://*.macys.com/*',
-    'https://*.nordstrom.com/*',
-    'https://*.zappos.com/*',
-    'https://*.bhphotovideo.com/*',
-    'https://*.adorama.com/*',
-    'https://*.overstock.com/*',
-    'https://*.chewy.com/*',
-    'https://*.etsy.com/*',
-    // Plus: background will programmatically inject on ANY tracked link from ChatGPT
-  ],
+  // Load on ALL https sites - AI decides what's relevant, not a hardcoded list
+  matches: ['https://*/*'],
   runAt: 'document_idle',
 
   main() {
@@ -109,11 +87,13 @@ async function initShoppingAssistant() {
       return true;
     }
     
-    console.log('[Sift] Received message:', message.type);
+    console.log('[Sift Shopping] Received message:', message.type);
     
     // Handle scrape request from popup
     if (message.type === 'SCRAPE_PRODUCTS') {
+      console.log('[Sift Shopping] Scraping products for popup...');
       const products = scrapeProducts();
+      console.log('[Sift Shopping] Found', products.length, 'products');
       sendResponse({ products });
       return true;
     }

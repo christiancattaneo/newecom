@@ -574,52 +574,80 @@ const shopProductsList = document.getElementById('shop-products-list') as HTMLEl
 const shopLoading = document.getElementById('shop-loading') as HTMLElement;
 
 async function loadShopContext() {
+  console.log('[Sift Popup] loadShopContext called');
+  
   try {
     const result = await browser.runtime.sendMessage({ type: 'CHECK_CONTEXT_EXISTS' });
+    console.log('[Sift Popup] Context check result:', result);
     
     if (!result?.exists || !result.context) {
+      console.log('[Sift Popup] No context exists');
       showNoShopContext();
       return;
     }
     
     // Check if current tab is a shopping site with products
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    console.log('[Sift Popup] Current tab:', tab?.url, 'id:', tab?.id);
+    
     if (!tab?.id || !tab.url) {
+      console.log('[Sift Popup] No tab or URL');
       showShopReady(result.context);
       return;
     }
     
     // Skip non-http pages
     if (!tab.url.startsWith('http')) {
+      console.log('[Sift Popup] Not HTTP page');
       showShopReady(result.context);
       return;
     }
     
     // Try to get products from current page
+    console.log('[Sift Popup] Attempting to scrape products from tab', tab.id);
+    showShopLoading();
+    
     try {
-      showShopLoading();
+      // First, try to inject the content script if not already there
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['content-scripts/shopping.js'],
+        });
+        console.log('[Sift Popup] Injected shopping script');
+      } catch (injectErr) {
+        console.log('[Sift Popup] Script injection skipped (may already exist):', injectErr);
+      }
+      
+      // Wait a moment for script to initialize
+      await new Promise(r => setTimeout(r, 300));
       
       const products = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_PRODUCTS' });
+      console.log('[Sift Popup] Scrape result:', products);
       
       if (products?.products && products.products.length > 0) {
+        console.log('[Sift Popup] Found', products.products.length, 'products, ranking...');
+        
         // We have products! Rank them
         const rankings = await browser.runtime.sendMessage({ 
           type: 'RANK_PRODUCTS', 
           products: products.products 
         });
+        console.log('[Sift Popup] Rankings result:', rankings);
         
         if (rankings && !rankings.error && rankings.rankings) {
+          console.log('[Sift Popup] Showing results');
           showShopResults(result.context, products.products, rankings);
         } else {
-          // Ranking failed but we have products
+          console.log('[Sift Popup] Ranking failed:', rankings?.error);
           showShopReady(result.context);
         }
       } else {
-        // No products on this page
+        console.log('[Sift Popup] No products found on page');
         showShopReady(result.context);
       }
     } catch (e) {
-      // Can't communicate with page (not a shopping page)
+      console.error('[Sift Popup] Failed to communicate with page:', e);
       showShopReady(result.context);
     }
   } catch (error) {
