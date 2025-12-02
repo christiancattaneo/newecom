@@ -13,46 +13,69 @@
       <p class="tagline">Smart shopping assistant</p>
     </header>
 
+    <!-- Tab Navigation -->
+    <nav class="tabs">
+      <button class="tab active" data-tab="current">Current</button>
+      <button class="tab" data-tab="history">History <span id="history-count" class="badge">0</span></button>
+    </nav>
+
     <main>
-      <section id="status-section">
-        <div id="status-indicator" class="status inactive">
-          <span class="dot"></span>
-          <span class="text">No active context</span>
-        </div>
-      </section>
+      <!-- CURRENT TAB -->
+      <div id="tab-current" class="tab-content active">
+        <section id="status-section">
+          <div id="status-indicator" class="status inactive">
+            <span class="dot"></span>
+            <span class="text">No active context</span>
+          </div>
+        </section>
 
-      <section id="context-section" class="hidden">
-        <h2>Your Search</h2>
-        <div id="context-display">
-          <p id="context-query"></p>
-          
-          <div id="context-stats" class="stats"></div>
-          
-          <div id="requirements-section">
-            <h3>Requirements</h3>
-            <ul id="context-requirements"></ul>
+        <section id="context-section" class="hidden">
+          <div id="context-display">
+            <p id="context-query"></p>
+            
+            <div id="context-stats" class="stats"></div>
+            
+            <div id="requirements-section">
+              <h3>Requirements</h3>
+              <ul id="context-requirements"></ul>
+            </div>
+            
+            <div id="links-section" class="hidden">
+              <h3>Tracked Links</h3>
+              <ul id="context-links"></ul>
+            </div>
+            
+            <div id="products-section" class="hidden">
+              <h3>Mentioned Products</h3>
+              <ul id="context-products"></ul>
+            </div>
           </div>
-          
-          <div id="links-section" class="hidden">
-            <h3>Tracked Links</h3>
-            <ul id="context-links"></ul>
-          </div>
-          
-          <div id="products-section" class="hidden">
-            <h3>Mentioned Products</h3>
-            <ul id="context-products"></ul>
-          </div>
-        </div>
-        <button id="clear-context" class="btn-secondary">Clear Context</button>
-      </section>
+          <button id="clear-context" class="btn-secondary">Clear Current</button>
+        </section>
 
-      <section id="no-context-section">
-        <div class="empty-state">
-          <div class="icon">💬</div>
-          <p>Start researching a product in ChatGPT</p>
-          <p class="hint">Sift will automatically capture your requirements</p>
-        </div>
-      </section>
+        <section id="no-context-section">
+          <div class="empty-state">
+            <div class="icon">💬</div>
+            <p>Start researching a product in ChatGPT</p>
+            <p class="hint">Sift will automatically capture your requirements</p>
+          </div>
+        </section>
+      </div>
+
+      <!-- HISTORY TAB -->
+      <div id="tab-history" class="tab-content">
+        <section id="history-section">
+          <div id="history-list" class="history-list">
+            <!-- History items will be inserted here -->
+          </div>
+          <div id="no-history" class="empty-state hidden">
+            <div class="icon">📚</div>
+            <p>No research history yet</p>
+            <p class="hint">Your ChatGPT product research will appear here</p>
+          </div>
+        </section>
+        <button id="clear-history" class="btn-danger hidden">Clear All History</button>
+      </div>
     </main>
 
     <footer>

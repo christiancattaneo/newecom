@@ -1,6 +1,6 @@
 /**
  * Popup Main Script
- * Shows accumulated context and current analysis state
+ * Shows accumulated context and research history
  */
 
 interface ProductContext {
@@ -14,12 +14,15 @@ interface ProductContext {
   conversationId?: string;
 }
 
-interface AnalysisState {
-  tabId: number;
-  url: string;
-  status: 'analyzing' | 'done' | 'error';
-  isTrackedLink: boolean;
+interface ResearchEntry {
+  id: string;
+  query: string;
+  requirements: string[];
+  categories: string[];
+  keywords: string[];
   timestamp: number;
+  lastUsed: number;
+  conversationId?: string;
 }
 
 // DOM Elements
@@ -36,14 +39,51 @@ const productsSection = document.getElementById('products-section')!;
 const contextProducts = document.getElementById('context-products')!;
 const clearButton = document.getElementById('clear-context')!;
 
+// History elements
+const historyList = document.getElementById('history-list')!;
+const noHistory = document.getElementById('no-history')!;
+const historyCount = document.getElementById('history-count')!;
+const clearHistoryBtn = document.getElementById('clear-history')!;
+
+// Tab elements
+const tabs = document.querySelectorAll('.tab');
+const tabContents = document.querySelectorAll('.tab-content');
+
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
   await loadContext();
+  await loadHistory();
   setupEventListeners();
+  setupTabs();
   
-  // Refresh every 2 seconds to show live updates
+  // Refresh every 2 seconds
   setInterval(loadContext, 2000);
 });
+
+function setupTabs() {
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const tabName = tab.getAttribute('data-tab');
+      
+      // Update tab buttons
+      tabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      
+      // Update tab content
+      tabContents.forEach(content => {
+        content.classList.remove('active');
+        if (content.id === `tab-${tabName}`) {
+          content.classList.add('active');
+        }
+      });
+      
+      // Refresh history when switching to history tab
+      if (tabName === 'history') {
+        loadHistory();
+      }
+    });
+  });
+}
 
 async function loadContext() {
   try {
@@ -60,20 +100,135 @@ async function loadContext() {
   }
 }
 
+async function loadHistory() {
+  try {
+    const result = await browser.runtime.sendMessage({ type: 'GET_RESEARCH_HISTORY' });
+    const history: ResearchEntry[] = result || [];
+    
+    historyCount.textContent = String(history.length);
+    
+    if (history.length === 0) {
+      historyList.innerHTML = '';
+      noHistory.classList.remove('hidden');
+      clearHistoryBtn.classList.add('hidden');
+    } else {
+      noHistory.classList.add('hidden');
+      clearHistoryBtn.classList.remove('hidden');
+      renderHistory(history);
+    }
+  } catch (error) {
+    console.error('[Sift Popup] Failed to load history:', error);
+  }
+}
+
+function renderHistory(history: ResearchEntry[]) {
+  historyList.innerHTML = history.map((entry, index) => {
+    const date = new Date(entry.timestamp);
+    const timeAgo = getTimeAgo(entry.timestamp);
+    const categories = entry.categories.slice(0, 3).map(c => 
+      `<span class="category-tag">${c}</span>`
+    ).join('');
+    const requirements = entry.requirements.slice(0, 3).map(r => 
+      `<span class="req-tag">${r}</span>`
+    ).join('');
+    
+    return `
+      <div class="history-item" data-index="${index}">
+        <div class="history-header">
+          <span class="history-query">"${entry.query.slice(0, 40)}${entry.query.length > 40 ? '...' : ''}"</span>
+          <span class="history-time" title="${date.toLocaleString()}">${timeAgo}</span>
+        </div>
+        <div class="history-categories">${categories}</div>
+        <div class="history-requirements">${requirements || '<span class="no-reqs">No requirements</span>'}</div>
+        <div class="history-actions">
+          <button class="btn-use" data-id="${entry.id}">Use This</button>
+          <button class="btn-delete" data-id="${entry.id}">×</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+  
+  // Add event listeners for buttons
+  historyList.querySelectorAll('.btn-use').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const id = (e.target as HTMLElement).getAttribute('data-id');
+      await useHistoryEntry(id!);
+    });
+  });
+  
+  historyList.querySelectorAll('.btn-delete').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const id = (e.target as HTMLElement).getAttribute('data-id');
+      await deleteHistoryEntry(id!);
+    });
+  });
+}
+
+async function useHistoryEntry(id: string) {
+  try {
+    const result = await browser.runtime.sendMessage({ type: 'GET_RESEARCH_HISTORY' });
+    const history: ResearchEntry[] = result || [];
+    const entry = history.find(h => h.id === id);
+    
+    if (entry) {
+      // Set as current context
+      await browser.runtime.sendMessage({
+        type: 'SAVE_CONTEXT',
+        context: {
+          query: entry.query,
+          requirements: entry.requirements,
+          timestamp: Date.now(),
+          source: 'chatgpt',
+          conversationId: entry.conversationId,
+        }
+      });
+      
+      // Switch to current tab
+      tabs.forEach(t => t.classList.remove('active'));
+      document.querySelector('[data-tab="current"]')?.classList.add('active');
+      tabContents.forEach(c => c.classList.remove('active'));
+      document.getElementById('tab-current')?.classList.add('active');
+      
+      await loadContext();
+    }
+  } catch (error) {
+    console.error('[Sift Popup] Failed to use history entry:', error);
+  }
+}
+
+async function deleteHistoryEntry(id: string) {
+  try {
+    const result = await browser.runtime.sendMessage({ type: 'GET_RESEARCH_HISTORY' });
+    const history: ResearchEntry[] = result || [];
+    const filtered = history.filter(h => h.id !== id);
+    
+    await chrome.storage.local.set({ 'sift:researchHistory': filtered });
+    await loadHistory();
+  } catch (error) {
+    console.error('[Sift Popup] Failed to delete history entry:', error);
+  }
+}
+
+function getTimeAgo(timestamp: number): string {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  
+  if (seconds < 60) return 'Just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  if (seconds < 604800) return `${Math.floor(seconds / 86400)}d ago`;
+  return `${Math.floor(seconds / 604800)}w ago`;
+}
+
 function showContext(context: ProductContext) {
-  // Update status
   statusIndicator.classList.remove('inactive');
   statusIndicator.classList.add('active');
   statusText.textContent = 'Context active';
 
-  // Show context section
   contextSection.classList.remove('hidden');
   noContextSection.classList.add('hidden');
 
-  // Display query
   contextQuery.textContent = context.query ? `"${context.query}"` : '(No specific product)';
   
-  // Stats
   const stats: string[] = [];
   if (context.messageCount) stats.push(`📝 ${context.messageCount} messages`);
   if (context.requirements?.length) stats.push(`🎯 ${context.requirements.length} requirements`);
@@ -82,7 +237,6 @@ function showContext(context: ProductContext) {
   
   contextStats.innerHTML = stats.map(s => `<span class="stat">${s}</span>`).join('');
   
-  // Requirements
   if (context.requirements && context.requirements.length > 0) {
     contextRequirements.innerHTML = context.requirements
       .map(req => `<li class="requirement-tag">${req}</li>`)
@@ -91,7 +245,6 @@ function showContext(context: ProductContext) {
     contextRequirements.innerHTML = '<li class="empty">No specific requirements captured</li>';
   }
 
-  // Tracked Links
   if (context.trackedLinks && context.trackedLinks.length > 0) {
     linksSection.classList.remove('hidden');
     contextLinks.innerHTML = context.trackedLinks
@@ -108,7 +261,6 @@ function showContext(context: ProductContext) {
     linksSection.classList.add('hidden');
   }
 
-  // Mentioned Products
   if (context.mentionedProducts && context.mentionedProducts.length > 0) {
     productsSection.classList.remove('hidden');
     contextProducts.innerHTML = context.mentionedProducts
@@ -136,6 +288,17 @@ function setupEventListeners() {
       showNoContext();
     } catch (error) {
       console.error('[Sift Popup] Failed to clear context:', error);
+    }
+  });
+  
+  clearHistoryBtn.addEventListener('click', async () => {
+    if (confirm('Clear all research history?')) {
+      try {
+        await chrome.storage.local.set({ 'sift:researchHistory': [] });
+        await loadHistory();
+      } catch (error) {
+        console.error('[Sift Popup] Failed to clear history:', error);
+      }
     }
   });
 }
