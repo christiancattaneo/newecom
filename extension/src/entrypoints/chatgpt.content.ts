@@ -35,8 +35,6 @@ interface ConversationContext {
 
 let context: ConversationContext = createEmptyContext();
 let isContextValid = true;
-let aiResponseObserver: MutationObserver | null = null;
-let lastAiContent = '';
 
 function createEmptyContext(): ConversationContext {
   return {
@@ -63,6 +61,10 @@ function getConversationId(): string | null {
   return match ? match[1] : null;
 }
 
+// Debounce helper to prevent cascade
+let scrapeTimeout: ReturnType<typeof setTimeout> | null = null;
+let hasScrapedOnce = false;
+
 function initCapture() {
   if (!checkExtensionContext()) {
     showRefreshMessage();
@@ -74,50 +76,57 @@ function initCapture() {
 
   console.log('[Sift] Initializing capture, conversation:', convId);
 
-  // 1. SCRAPE ENTIRE EXISTING CONVERSATION - multiple attempts for slow-loading pages
-  const doFullScrape = () => {
+  // 1. SCRAPE EXISTING CONVERSATION - single delayed attempt (let page load first)
+  setTimeout(() => {
     scrapeEntireConversation();
-    // Show indicator if we found content
     if (context.messages.length > 0) {
       showCaptureIndicator('prompt');
+      hasScrapedOnce = true;
     }
-  };
+  }, 2000);
 
-  // Immediate attempt
-  doFullScrape();
-  // Retry at intervals (ChatGPT lazy-loads content)
-  setTimeout(doFullScrape, 800);
-  setTimeout(doFullScrape, 2000);
-  setTimeout(doFullScrape, 4000);
-
-  // 2. WATCH FOR NEW USER PROMPTS
+  // 2. WATCH FOR NEW USER PROMPTS (lightweight)
   watchUserPrompts();
 
-  // 3. WATCH FOR AI RESPONSES (real-time streaming)
-  watchAiResponses();
-
-  // 4. WATCH FOR URL CHANGES (switching conversations)
+  // 3. WATCH FOR URL CHANGES (switching conversations)
   watchUrlChanges();
 
-  // 5. WATCH FOR DOM READY (conversation loads after initial page)
-  waitForConversationLoad();
+  // 4. ONE lightweight observer for new messages (NOT on every DOM change)
+  watchForNewMessages();
 }
 
-function waitForConversationLoad() {
-  // Wait for conversation container to appear
-  const observer = new MutationObserver((mutations, obs) => {
-    const hasMessages = document.querySelectorAll('[data-message-author-role]').length > 0;
-    if (hasMessages) {
-      console.log('[Sift] Conversation loaded, scraping...');
-      scrapeEntireConversation();
-      showCaptureIndicator('prompt');
-    }
-  });
-  
-  observer.observe(document.body, { childList: true, subtree: true });
-  
-  // Stop watching after 10 seconds
-  setTimeout(() => observer.disconnect(), 10000);
+function watchForNewMessages() {
+  // Only watch the main content area, not entire body
+  const checkForMain = () => {
+    const main = document.querySelector('main') || document.body;
+    
+    let lastMessageCount = 0;
+    const observer = new MutationObserver(() => {
+      // Debounce - only run after 500ms of no changes
+      if (scrapeTimeout) clearTimeout(scrapeTimeout);
+      scrapeTimeout = setTimeout(() => {
+        const currentCount = document.querySelectorAll('[data-message-author-role]').length;
+        // Only scrape if message count changed
+        if (currentCount > lastMessageCount) {
+          lastMessageCount = currentCount;
+          scrapeEntireConversation();
+          if (!hasScrapedOnce && context.messages.length > 0) {
+            showCaptureIndicator('prompt');
+            hasScrapedOnce = true;
+          }
+        }
+      }, 500);
+    });
+    
+    observer.observe(main, { childList: true, subtree: true });
+  };
+
+  // Wait for main to exist
+  if (document.querySelector('main')) {
+    checkForMain();
+  } else {
+    setTimeout(checkForMain, 1000);
+  }
 }
 
 function scrapeEntireConversation() {
@@ -180,13 +189,14 @@ function scrapeEntireConversation() {
 }
 
 function watchUserPrompts() {
-  // Watch for Enter key on textarea
+  // Watch for Enter key on textarea (lightweight - just event listeners, no observers)
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
-      const textarea = document.querySelector('#prompt-textarea, textarea[placeholder*="Message"], textarea[data-id]') as HTMLTextAreaElement;
+      const textarea = document.querySelector('#prompt-textarea, textarea[placeholder*="Message"]') as HTMLTextAreaElement;
       if (textarea && document.activeElement === textarea && textarea.value.trim()) {
         const prompt = textarea.value.trim();
-        addUserMessage(prompt);
+        // Delay to let ChatGPT process
+        setTimeout(() => addUserMessage(prompt), 100);
       }
     }
   }, true);
@@ -197,55 +207,15 @@ function watchUserPrompts() {
     if (target.closest('button[data-testid="send-button"], button[aria-label*="Send"]')) {
       const textarea = document.querySelector('#prompt-textarea, textarea[placeholder*="Message"]') as HTMLTextAreaElement;
       if (textarea?.value.trim()) {
-        addUserMessage(textarea.value.trim());
+        const prompt = textarea.value.trim();
+        setTimeout(() => addUserMessage(prompt), 100);
       }
     }
   }, true);
-
-  // Watch for new user message elements appearing
-  const observer = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
-        if (node instanceof HTMLElement) {
-          const userMsg = node.querySelector?.('[data-message-author-role="user"]') || 
-                         (node.matches?.('[data-message-author-role="user"]') ? node : null);
-          if (userMsg) {
-            const text = userMsg.textContent?.trim();
-            if (text && text.length > 2) {
-              // Check if we already have this message
-              const lastUserMsg = context.messages.filter(m => m.role === 'user').pop();
-              if (!lastUserMsg || lastUserMsg.content !== text) {
-                addUserMessage(text);
-              }
-            }
-          }
-        }
-      }
-    }
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
 }
 
-function watchAiResponses() {
-  // Watch for AI response elements being updated (streaming)
-  const observer = new MutationObserver((mutations) => {
-    // Find the latest AI message being streamed
-    const aiMessages = document.querySelectorAll('[data-message-author-role="assistant"] .markdown');
-    if (aiMessages.length === 0) return;
-    
-    const latestAiEl = aiMessages[aiMessages.length - 1];
-    const currentContent = latestAiEl.textContent?.trim() || '';
-    
-    // Only update if content has grown (streaming)
-    if (currentContent.length > lastAiContent.length + 50) {
-      lastAiContent = currentContent;
-      updateLatestAiMessage(currentContent);
-    }
-  });
-
-  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-  aiResponseObserver = observer;
-}
+// Removed watchAiResponses - it was too aggressive and caused freezing
+// AI responses are now captured via the debounced watchForNewMessages observer
 
 function watchUrlChanges() {
   const originalPushState = history.pushState;
@@ -263,19 +233,16 @@ function handleUrlChange() {
     console.log('[Sift] Conversation changed to:', newConvId);
     context = createEmptyContext();
     context.conversationId = newConvId;
-    lastAiContent = '';
+    hasScrapedOnce = false;
     
-    // Scrape new conversation with multiple attempts
-    const scrapeAndShow = () => {
+    // Single delayed scrape (let page load)
+    setTimeout(() => {
       scrapeEntireConversation();
       if (context.messages.length > 0) {
         showCaptureIndicator('prompt');
+        hasScrapedOnce = true;
       }
-    };
-    
-    setTimeout(scrapeAndShow, 500);
-    setTimeout(scrapeAndShow, 1500);
-    setTimeout(scrapeAndShow, 3000);
+    }, 2000);
   }
 }
 
@@ -302,29 +269,6 @@ function addUserMessage(content: string) {
   extractContextFromMessages();
   saveContext();
   showCaptureIndicator('prompt');
-}
-
-function updateLatestAiMessage(content: string) {
-  if (!checkExtensionContext()) return;
-
-  // Find or create latest AI message
-  const lastMsg = context.messages[context.messages.length - 1];
-  
-  if (lastMsg?.role === 'assistant') {
-    // Update existing
-    lastMsg.content = content.slice(0, 3000);
-    lastMsg.timestamp = Date.now();
-  } else {
-    // Add new
-    context.messages.push({
-      role: 'assistant',
-      content: content.slice(0, 3000),
-      timestamp: Date.now(),
-    });
-  }
-
-  extractContextFromMessages();
-  saveContext();
 }
 
 function extractContextFromMessages() {
