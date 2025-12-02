@@ -54,6 +54,14 @@ interface RankingResult {
   summary: string;
 }
 
+interface SiteAnalysisResult {
+  isShoppingSite: boolean;
+  siteCategory?: string;
+  matchedResearchId?: string;
+  matchScore?: number;
+  matchReason?: string;
+}
+
 // Storage keys
 const CONTEXT_KEY = 'sift:context';           // Current session context
 const HISTORY_KEY = 'sift:researchHistory';   // Persistent research history
@@ -76,6 +84,30 @@ interface UserProfile {
 
 // Production API URL
 const DEFAULT_API_URL = 'https://sift-api.christiandcattaneo.workers.dev';
+
+// ============================================
+// IN-MEMORY CACHES (Performance optimization)
+// ============================================
+
+// Cache for AI site analysis results (by domain)
+const siteAnalysisCache = new Map<string, {
+  result: SiteAnalysisResult;
+  timestamp: number;
+}>();
+const SITE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+// Cache for research history (avoid repeated storage reads)
+let historyCache: ResearchEntry[] | null = null;
+let historyCacheTime = 0;
+const HISTORY_CACHE_TTL = 5000; // 5 seconds
+
+// Track tabs where shopping script is already injected
+const injectedTabs = new Set<number>();
+
+// Debounce user profile updates
+let profileUpdateTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingProfileContext: ProductContext | null = null;
+const PROFILE_UPDATE_DELAY = 2000; // 2 seconds debounce
 
 // Product categories for intelligent matching
 const PRODUCT_CATEGORIES: Record<string, string[]> = {
@@ -107,6 +139,18 @@ export default defineBackground(() => {
   browser.webNavigation?.onCompleted.addListener((details) => {
     if (details.frameId === 0) {
       checkIfShoppingSite(details.tabId, details.url);
+    }
+  });
+  
+  // Clean up injected tabs tracker when tabs are closed
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    injectedTabs.delete(tabId);
+  });
+  
+  // Also clear injection tracker when tab navigates to new page
+  browser.webNavigation?.onBeforeNavigate.addListener((details) => {
+    if (details.frameId === 0) {
+      injectedTabs.delete(details.tabId);
     }
   });
 
@@ -241,6 +285,7 @@ async function addToResearchHistory(context: ProductContext): Promise<void> {
     const trimmedHistory = history.slice(0, 50);
     
     await chrome.storage.local.set({ [HISTORY_KEY]: trimmedHistory });
+    invalidateHistoryCache(); // Clear cache on write
     console.log('[Sift] Research history updated:', categories.join(', '));
   } catch (error) {
     console.error('[Sift] Failed to save to history:', error);
@@ -249,12 +294,26 @@ async function addToResearchHistory(context: ProductContext): Promise<void> {
 
 async function getResearchHistory(): Promise<ResearchEntry[]> {
   try {
+    // Use cache if fresh
+    const now = Date.now();
+    if (historyCache && (now - historyCacheTime) < HISTORY_CACHE_TTL) {
+      return historyCache;
+    }
+    
     const result = await chrome.storage.local.get(HISTORY_KEY);
-    return result[HISTORY_KEY] || [];
+    historyCache = result[HISTORY_KEY] || [];
+    historyCacheTime = now;
+    return historyCache;
   } catch (error) {
     console.error('[Sift] Failed to get history:', error);
     return [];
   }
+}
+
+// Invalidate history cache when writing
+function invalidateHistoryCache() {
+  historyCache = null;
+  historyCacheTime = 0;
 }
 
 async function cleanupOldHistory(): Promise<void> {
@@ -265,6 +324,7 @@ async function cleanupOldHistory(): Promise<void> {
     
     if (filtered.length !== history.length) {
       await chrome.storage.local.set({ [HISTORY_KEY]: filtered });
+      invalidateHistoryCache();
       console.log('[Sift] Cleaned up old history entries');
     }
   } catch (error) {
@@ -277,6 +337,7 @@ async function deleteHistoryEntry(id: string): Promise<{ success: boolean }> {
     const history = await getResearchHistory();
     const filtered = history.filter(h => h.id !== id);
     await chrome.storage.local.set({ [HISTORY_KEY]: filtered });
+    invalidateHistoryCache();
     return { success: true };
   } catch (error) {
     console.error('[Sift] Failed to delete history entry:', error);
@@ -298,7 +359,27 @@ async function getUserProfile(): Promise<UserProfile | null> {
   }
 }
 
+// Debounced: schedules profile update, batches rapid context saves
 async function updateUserProfile(context: ProductContext): Promise<void> {
+  // Store the latest context
+  pendingProfileContext = context;
+  
+  // Clear existing timer
+  if (profileUpdateTimer) {
+    clearTimeout(profileUpdateTimer);
+  }
+  
+  // Schedule debounced update
+  profileUpdateTimer = setTimeout(() => {
+    if (pendingProfileContext) {
+      doUpdateUserProfile(pendingProfileContext);
+      pendingProfileContext = null;
+    }
+  }, PROFILE_UPDATE_DELAY);
+}
+
+// Actual profile update (called after debounce)
+async function doUpdateUserProfile(context: ProductContext): Promise<void> {
   try {
     const currentProfile = await getUserProfile() || createEmptyProfile();
     const extracted = extractUserPreferences(context);
@@ -590,16 +671,8 @@ function extractProductName(query: string): string {
 }
 
 // ============================================
-// AI-POWERED SITE ANALYSIS
+// AI-POWERED SITE ANALYSIS (with caching)
 // ============================================
-
-interface SiteAnalysisResult {
-  isShoppingSite: boolean;
-  siteCategory?: string;
-  matchedResearchId?: string;
-  matchScore?: number;
-  matchReason?: string;
-}
 
 async function analyzeSiteWithAI(pageInfo: { 
   url: string; 
@@ -638,6 +711,54 @@ async function analyzeSiteWithAI(pageInfo: {
     return { matched: false, matchScore: 0 };
   }
   
+  // ===== CACHE CHECK =====
+  // Use domain as cache key (ignore path for shopping site detection)
+  let domain: string;
+  try {
+    domain = new URL(pageInfo.url).hostname.replace('www.', '');
+  } catch {
+    return { matched: false, matchScore: 0 };
+  }
+  
+  const cached = siteAnalysisCache.get(domain);
+  const now = Date.now();
+  
+  if (cached && (now - cached.timestamp) < SITE_CACHE_TTL) {
+    console.log('[Sift] Using cached site analysis for:', domain);
+    const cachedResult = cached.result;
+    
+    // If not a shopping site, return immediately
+    if (!cachedResult.isShoppingSite) {
+      return { matched: false, matchScore: 0 };
+    }
+    
+    // Re-check match against current history (history may have changed)
+    if (cachedResult.matchedResearchId && cachedResult.matchScore && cachedResult.matchScore > 50) {
+      const matchedEntry = history.find(h => h.id === cachedResult.matchedResearchId);
+      if (matchedEntry) {
+        matchedEntry.lastUsed = Date.now();
+        await chrome.storage.local.set({ [HISTORY_KEY]: history });
+        invalidateHistoryCache();
+        
+        return {
+          matched: true,
+          context: {
+            query: matchedEntry.query,
+            requirements: matchedEntry.requirements,
+            timestamp: matchedEntry.timestamp,
+            source: 'chatgpt',
+            conversationId: matchedEntry.conversationId,
+          },
+          matchedEntry,
+          matchScore: cachedResult.matchScore,
+          reason: cachedResult.matchReason,
+        };
+      }
+    }
+    
+    return { matched: false, matchScore: cachedResult.matchScore || 0, reason: cachedResult.matchReason };
+  }
+  
   try {
     const apiUrlResult = await chrome.storage.local.get(API_URL_KEY);
     const apiUrl = apiUrlResult[API_URL_KEY] || DEFAULT_API_URL;
@@ -669,6 +790,10 @@ async function analyzeSiteWithAI(pageInfo: {
     
     console.log('[Sift] AI analysis result:', result);
     
+    // ===== CACHE SAVE =====
+    siteAnalysisCache.set(domain, { result, timestamp: now });
+    console.log('[Sift] Cached site analysis for:', domain);
+    
     if (!result.isShoppingSite) {
       return { matched: false, matchScore: 0 };
     }
@@ -681,6 +806,7 @@ async function analyzeSiteWithAI(pageInfo: {
         // Update lastUsed
         matchedEntry.lastUsed = Date.now();
         await chrome.storage.local.set({ [HISTORY_KEY]: history });
+        invalidateHistoryCache();
         
         // Convert to ProductContext
         const matchedContext: ProductContext = {
@@ -800,19 +926,27 @@ function extractSearchQuery(url: string): string {
 }
 
 async function injectAndNotify(tabId: number, context: ProductContext, isTrackedLink: boolean, matchScore?: number) {
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ['content-scripts/shopping.js'],
-    });
-    console.log('[Sift] Injected shopping script');
-  } catch (e) {
-    // Script might already be injected
+  // Skip injection if already injected for this tab
+  if (!injectedTabs.has(tabId)) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['content-scripts/shopping.js'],
+      });
+      injectedTabs.add(tabId);
+      console.log('[Sift] Injected shopping script into tab', tabId);
+    } catch (e) {
+      // Script might already be injected by manifest match
+      injectedTabs.add(tabId); // Mark as injected anyway
+    }
+  } else {
+    console.log('[Sift] Script already injected in tab', tabId);
   }
   
+  // Shorter delay since we're tracking injection status
   setTimeout(async () => {
     await notifyTabWithContext(tabId, context, isTrackedLink, matchScore);
-  }, 1500);
+  }, 500);
 }
 
 async function notifyTabWithContext(tabId: number, context: ProductContext, isTrackedLink: boolean, matchScore?: number) {

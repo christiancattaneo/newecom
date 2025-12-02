@@ -92,18 +92,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupStorageListener();
   setupTabListener();
   
-  // Fast refresh cycle - every 500ms for responsiveness
-  setInterval(refreshAll, 500);
+  // NO MORE POLLING! We use event listeners instead:
+  // - Storage changes trigger via setupStorageListener()
+  // - Tab changes trigger via setupTabListener()
+  // - Only refresh once on popup open (above)
 });
 
 // ========================================
-// REACTIVE BROWSING TRACKING
+// REACTIVE BROWSING TRACKING (Event-driven, not polling!)
 // ========================================
 
-async function refreshAll() {
-  await loadCurrentPage();
-  await loadContext();
-}
+// Removed: refreshAll polling - now 100% event-driven
 
 async function loadCurrentPage() {
   try {
