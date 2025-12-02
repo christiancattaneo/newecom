@@ -35,6 +35,27 @@ interface RankProductsRequest {
   products: ProductData[];
 }
 
+interface AnalyzeSiteRequest {
+  url: string;
+  title: string;
+  description?: string;
+  researchHistory: Array<{
+    id: string;
+    query: string;
+    productName: string;
+    requirements: string[];
+    categories: string[];
+  }>;
+}
+
+interface AnalyzeSiteResponse {
+  isShoppingSite: boolean;
+  siteCategory?: string;
+  matchedResearchId?: string;
+  matchScore?: number;
+  matchReason?: string;
+}
+
 interface ProductRanking {
   index: number;
   score: number;
@@ -69,6 +90,10 @@ export default {
         return await handleRankProducts(request, env);
       }
 
+      if (path === '/api/analyze-site' && request.method === 'POST') {
+        return await handleAnalyzeSite(request, env);
+      }
+
       if (path === '/api/health') {
         return jsonResponse({ status: 'ok', version: '0.1.0' });
       }
@@ -80,6 +105,141 @@ export default {
     }
   },
 };
+
+// ============================================
+// SITE ANALYSIS - AI determines if shopping site matches research
+// ============================================
+
+async function handleAnalyzeSite(request: Request, env: Env): Promise<Response> {
+  if (!env.GROQ_API_KEY) {
+    return jsonResponse({ error: 'Service not configured' }, 500);
+  }
+
+  let body: AnalyzeSiteRequest;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: 'Invalid JSON' }, 400);
+  }
+
+  if (!body.url || !body.title) {
+    return jsonResponse({ error: 'Missing url or title' }, 400);
+  }
+
+  // No research history = nothing to match
+  if (!body.researchHistory || body.researchHistory.length === 0) {
+    return jsonResponse({ isShoppingSite: false });
+  }
+
+  try {
+    const result = await analyzeSiteWithAI(body, env.GROQ_API_KEY);
+    return jsonResponse(result);
+  } catch (error) {
+    console.error('Site analysis error:', error);
+    // Fallback: not a shopping match
+    return jsonResponse({ isShoppingSite: false });
+  }
+}
+
+async function analyzeSiteWithAI(
+  request: AnalyzeSiteRequest,
+  apiKey: string
+): Promise<AnalyzeSiteResponse> {
+  // Build the research history for the prompt
+  const researchList = request.researchHistory
+    .slice(0, 10)
+    .map((r, i) => `[${r.id}] "${r.productName}" - Requirements: ${r.requirements.slice(0, 3).join(', ') || 'none specified'}`)
+    .join('\n');
+
+  const prompt = `You are analyzing a website to determine if it's a shopping/e-commerce site and if it matches what a user previously researched.
+
+## Website Info:
+- URL: ${request.url}
+- Page Title: ${request.title}
+${request.description ? `- Meta Description: ${request.description}` : ''}
+
+## User's Previous Product Research:
+${researchList}
+
+## Your Task:
+1. Is this a shopping/e-commerce site where users can buy products? (Not just a blog, news site, or informational page)
+2. If yes, what product category does this page/site sell?
+3. Does this match ANY of the user's research items? Match by product category, not exact words.
+
+Examples of MATCHES:
+- Research "shower water filter" → Site selling "bathroom fixtures" or "water filtration" = MATCH
+- Research "espresso machine" → Site selling "coffee equipment" or "kitchen appliances" = MATCH
+- Research "running shoes" → Site selling "athletic footwear" or "sports gear" = MATCH
+
+Examples of NON-MATCHES:
+- Research "laptop" → Site selling "furniture" = NO MATCH
+- Research "water filter" → Blog about water quality = NO MATCH (not a shopping site)
+- Research "headphones" → Amazon homepage with no search = WEAK MATCH (too generic)
+
+## Response (JSON only):
+{
+  "isShoppingSite": true/false,
+  "siteCategory": "what this site/page sells",
+  "matchedResearchId": "ID from research list if matched, or null",
+  "matchScore": 0-100,
+  "matchReason": "brief explanation"
+}
+
+Be smart about fuzzy matching - "bathroom water filter" matches "shower filter research".
+Only return matchScore > 50 if there's a genuine category/product match.`;
+
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'llama-3.1-8b-instant', // Fast model for quick analysis
+      messages: [
+        {
+          role: 'system',
+          content: 'You analyze websites to detect shopping sites and match with user research. Respond with JSON only.',
+        },
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+      temperature: 0.2,
+      max_tokens: 300,
+      response_format: { type: 'json_object' },
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Groq API error: ${response.status}`);
+  }
+
+  const data = await response.json() as any;
+  const content = data.choices?.[0]?.message?.content;
+
+  if (!content) {
+    throw new Error('No content in response');
+  }
+
+  try {
+    const parsed = JSON.parse(content.trim());
+    return {
+      isShoppingSite: !!parsed.isShoppingSite,
+      siteCategory: parsed.siteCategory || undefined,
+      matchedResearchId: parsed.matchedResearchId || undefined,
+      matchScore: typeof parsed.matchScore === 'number' ? parsed.matchScore : 0,
+      matchReason: parsed.matchReason || undefined,
+    };
+  } catch {
+    return { isShoppingSite: false };
+  }
+}
+
+// ============================================
+// PRODUCT RANKING
+// ============================================
 
 async function handleRankProducts(request: Request, env: Env): Promise<Response> {
   // Validate API key exists

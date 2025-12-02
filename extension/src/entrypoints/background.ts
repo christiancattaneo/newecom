@@ -119,8 +119,8 @@ async function handleMessage(message: any, sender: chrome.runtime.MessageSender)
     case 'GET_RESEARCH_HISTORY':
       return getResearchHistory();
     
-    case 'MATCH_CATEGORY':
-      return matchCategory(message.pageInfo);
+    case 'DELETE_HISTORY_ENTRY':
+      return deleteHistoryEntry(message.id);
     
     default:
       console.warn('[Sift] Unknown message type:', message.type);
@@ -248,6 +248,18 @@ async function cleanupOldHistory(): Promise<void> {
   }
 }
 
+async function deleteHistoryEntry(id: string): Promise<{ success: boolean }> {
+  try {
+    const history = await getResearchHistory();
+    const filtered = history.filter(h => h.id !== id);
+    await chrome.storage.local.set({ [HISTORY_KEY]: filtered });
+    return { success: true };
+  } catch (error) {
+    console.error('[Sift] Failed to delete history entry:', error);
+    return { success: false };
+  }
+}
+
 function extractCategories(context: ProductContext): string[] {
   const text = [
     context.query,
@@ -315,144 +327,141 @@ function extractProductName(query: string): string {
 }
 
 // ============================================
-// INTELLIGENT CATEGORY MATCHING
+// AI-POWERED SITE ANALYSIS
 // ============================================
 
-async function matchCategory(pageInfo: { url: string; title: string; searchQuery?: string }): Promise<{
+interface SiteAnalysisResult {
+  isShoppingSite: boolean;
+  siteCategory?: string;
+  matchedResearchId?: string;
+  matchScore?: number;
+  matchReason?: string;
+}
+
+async function analyzeSiteWithAI(pageInfo: { 
+  url: string; 
+  title: string; 
+  description?: string;
+}): Promise<{
   matched: boolean;
   context?: ProductContext;
   matchedEntry?: ResearchEntry;
   matchScore: number;
+  reason?: string;
 }> {
-  // Get current session context
-  const currentContext = await getContext();
-  
   // Get research history
   const history = await getResearchHistory();
   
-  if (history.length === 0 && !currentContext) {
+  if (history.length === 0) {
     return { matched: false, matchScore: 0 };
   }
   
-  // Detect what category the user is browsing
-  const pageCategories = detectPageCategory(pageInfo);
-  const pageKeywords = extractPageKeywords(pageInfo);
+  // Skip obvious non-shopping pages
+  const skipPatterns = [
+    /google\.(com|[a-z]{2})\/search/i,
+    /youtube\.com/i,
+    /facebook\.com/i,
+    /twitter\.com|x\.com/i,
+    /instagram\.com/i,
+    /reddit\.com/i,
+    /wikipedia\.org/i,
+    /chatgpt\.com|openai\.com/i,
+    /github\.com/i,
+    /linkedin\.com/i,
+  ];
   
-  console.log('[Sift] Page categories:', pageCategories, 'Keywords:', pageKeywords.slice(0, 5));
-  
-  // First check if current context matches
-  if (currentContext) {
-    const currentCategories = extractCategories(currentContext);
-    const currentKeywords = extractKeywords(currentContext);
-    const score = calculateMatchScore(pageCategories, pageKeywords, currentCategories, currentKeywords);
-    
-    if (score > 30) {
-      console.log('[Sift] Current context matches! Score:', score);
-      return { matched: true, context: currentContext, matchScore: score };
-    }
+  if (skipPatterns.some(p => p.test(pageInfo.url))) {
+    console.log('[Sift] Skipping non-shopping site:', pageInfo.url);
+    return { matched: false, matchScore: 0 };
   }
   
-  // Check research history for matches
-  let bestMatch: { entry: ResearchEntry; score: number } | null = null;
-  
-  for (const entry of history) {
-    const score = calculateMatchScore(pageCategories, pageKeywords, entry.categories, entry.keywords);
+  try {
+    const apiUrlResult = await chrome.storage.local.get(API_URL_KEY);
+    const apiUrl = apiUrlResult[API_URL_KEY] || DEFAULT_API_URL;
     
-    if (score > 30 && (!bestMatch || score > bestMatch.score)) {
-      bestMatch = { entry, score };
+    console.log('[Sift] Analyzing site with AI:', pageInfo.title);
+    
+    const response = await fetch(`${apiUrl}/api/analyze-site`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: pageInfo.url,
+        title: pageInfo.title,
+        description: pageInfo.description,
+        researchHistory: history.map(h => ({
+          id: h.id,
+          query: h.query,
+          productName: h.productName,
+          requirements: h.requirements,
+          categories: h.categories,
+        })),
+      }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
     }
-  }
-  
-  if (bestMatch) {
-    console.log('[Sift] Historical match found! Query:', bestMatch.entry.query, 'Score:', bestMatch.score);
     
-    // Update lastUsed
-    bestMatch.entry.lastUsed = Date.now();
-    await chrome.storage.local.set({ [HISTORY_KEY]: history });
+    const result: SiteAnalysisResult = await response.json();
     
-    // Convert to ProductContext format
-    const matchedContext: ProductContext = {
-      query: bestMatch.entry.query,
-      requirements: bestMatch.entry.requirements,
-      timestamp: bestMatch.entry.timestamp,
-      source: 'chatgpt',
-      conversationId: bestMatch.entry.conversationId,
+    console.log('[Sift] AI analysis result:', result);
+    
+    if (!result.isShoppingSite) {
+      return { matched: false, matchScore: 0 };
+    }
+    
+    // Check for match
+    if (result.matchedResearchId && result.matchScore && result.matchScore > 50) {
+      const matchedEntry = history.find(h => h.id === result.matchedResearchId);
+      
+      if (matchedEntry) {
+        // Update lastUsed
+        matchedEntry.lastUsed = Date.now();
+        await chrome.storage.local.set({ [HISTORY_KEY]: history });
+        
+        // Convert to ProductContext
+        const matchedContext: ProductContext = {
+          query: matchedEntry.query,
+          requirements: matchedEntry.requirements,
+          timestamp: matchedEntry.timestamp,
+          source: 'chatgpt',
+          conversationId: matchedEntry.conversationId,
+        };
+        
+        return {
+          matched: true,
+          context: matchedContext,
+          matchedEntry,
+          matchScore: result.matchScore,
+          reason: result.matchReason,
+        };
+      }
+    }
+    
+    // Site is shopping but no strong match
+    return { 
+      matched: false, 
+      matchScore: result.matchScore || 0,
+      reason: result.matchReason,
     };
     
-    return { matched: true, context: matchedContext, matchedEntry: bestMatch.entry, matchScore: bestMatch.score };
+  } catch (error) {
+    console.error('[Sift] AI site analysis failed:', error);
+    return { matched: false, matchScore: 0 };
   }
-  
-  return { matched: false, matchScore: 0 };
-}
-
-function detectPageCategory(pageInfo: { url: string; title: string; searchQuery?: string }): string[] {
-  const text = [
-    pageInfo.url,
-    pageInfo.title,
-    pageInfo.searchQuery || '',
-  ].join(' ').toLowerCase();
-  
-  const matches: string[] = [];
-  
-  for (const [category, keywords] of Object.entries(PRODUCT_CATEGORIES)) {
-    if (keywords.some(kw => text.includes(kw))) {
-      matches.push(category);
-    }
-  }
-  
-  return matches;
-}
-
-function extractPageKeywords(pageInfo: { url: string; title: string; searchQuery?: string }): string[] {
-  const text = [
-    pageInfo.title,
-    pageInfo.searchQuery || '',
-    // Extract keywords from URL path
-    decodeURIComponent(pageInfo.url).replace(/[^a-zA-Z]/g, ' '),
-  ].join(' ').toLowerCase();
-  
-  const stopWords = ['the', 'and', 'for', 'with', 'that', 'this', 'from', 'www', 'com', 'html', 'search', 'results', 'page'];
-  const words = text.match(/\b[a-z]{3,}\b/g) || [];
-  
-  return [...new Set(words.filter(w => !stopWords.includes(w)))];
-}
-
-function calculateMatchScore(
-  pageCategories: string[],
-  pageKeywords: string[],
-  researchCategories: string[],
-  researchKeywords: string[]
-): number {
-  let score = 0;
-  
-  // Category match: 40 points per match
-  for (const cat of pageCategories) {
-    if (researchCategories.includes(cat)) {
-      score += 40;
-    }
-  }
-  
-  // Keyword match: 5 points per match
-  for (const kw of pageKeywords) {
-    if (researchKeywords.includes(kw)) {
-      score += 5;
-    }
-  }
-  
-  return Math.min(score, 100);
 }
 
 // ============================================
-// SHOPPING SITE DETECTION
+// SHOPPING SITE DETECTION (AI-POWERED)
 // ============================================
 
 async function checkIfShoppingSite(tabId: number, url: string) {
-  // First check current session context
+  // First check current session context for tracked links
   const { exists, context } = await checkContextExists();
   
-  // Check if this URL matches any tracked link from current session
-  if (exists && context) {
-    const matchedLink = context.trackedLinks?.find(link => {
+  // Check if this URL matches any tracked link from ChatGPT conversation
+  if (exists && context?.trackedLinks) {
+    const matchedLink = context.trackedLinks.find(link => {
       try {
         const trackedUrl = new URL(link.url);
         const currentUrl = new URL(url);
@@ -465,37 +474,50 @@ async function checkIfShoppingSite(tabId: number, url: string) {
     });
 
     if (matchedLink) {
-      console.log('[Sift] TRACKED LINK detected:', matchedLink.domain);
+      console.log('[Sift] TRACKED LINK from ChatGPT:', matchedLink.domain);
       await injectAndNotify(tabId, context, true);
       return;
     }
   }
 
-  // For shopping sites: try intelligent category matching
+  // Use AI to analyze the site and match against research history
   try {
     const tab = await chrome.tabs.get(tabId);
+    
+    // Wait a moment for page to settle
+    await new Promise(r => setTimeout(r, 500));
+    
+    // Get meta description if possible
+    let description = '';
+    try {
+      const [result] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const meta = document.querySelector('meta[name="description"]');
+          return meta?.getAttribute('content') || '';
+        },
+      });
+      description = result?.result || '';
+    } catch {
+      // Can't inject script, proceed without description
+    }
+    
     const pageInfo = {
       url,
       title: tab.title || '',
-      searchQuery: extractSearchQuery(url),
+      description,
     };
     
-    const match = await matchCategory(pageInfo);
+    // AI determines if this is a shopping site that matches user's research
+    const match = await analyzeSiteWithAI(pageInfo);
     
     if (match.matched && match.context) {
-      console.log('[Sift] Intelligent match! Score:', match.matchScore);
+      console.log('[Sift] AI MATCH! Score:', match.matchScore, 'Reason:', match.reason);
       await injectAndNotify(tabId, match.context, false, match.matchScore);
       return;
     }
   } catch (e) {
-    // Tab might not exist anymore
-  }
-
-  // No match found - just try to notify if content script exists
-  if (exists && context) {
-    setTimeout(async () => {
-      await notifyTabWithContext(tabId, context, false);
-    }, 1000);
+    console.error('[Sift] Site check failed:', e);
   }
 }
 
